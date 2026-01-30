@@ -330,7 +330,7 @@ function beginBattleFromArchetype(archetype) {
 // -------------------------
 // Posters (local assets) + drawing
 // -------------------------
-const POSTER_BASE = "assets/posters/";
+const POSTER_BASE = "frontend/assets/posters/";
 const posterCache = new Map(); // id -> { img, loaded, failed }
 
 // ... (UNCHANGED BELOW THIS LINE except where noted) ...

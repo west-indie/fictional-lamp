@@ -7,8 +7,8 @@ export const SILENT_MIX = { layer1: 0, layer2: 0 };       // optional utility
 
 export const MenuLayers = createLayeredBgm({
   stems: {
-    layer1: "assets/audio/bgm/Menu01.ogg",
-    layer2: "assets/audio/bgm/Menu02.ogg",
+    layer1: "frontend/assets/audio/bgm/Menu01.ogg",
+    layer2: "frontend/assets/audio/bgm/Menu02.ogg",
   },
   initialMix: SILENT_MIX,
 });

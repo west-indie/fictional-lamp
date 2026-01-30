@@ -133,7 +133,7 @@ const msgBox = createBattleMessageBox({ playTextBlip });
 // ======================================================
 // ✅ BATTLE BGM (start at battle start, stop at victory/defeat)
 // ======================================================
-const DEFAULT_BATTLE_BGM_URL = "/assets/audio/bgm/Workin.mp3";
+const DEFAULT_BATTLE_BGM_URL = "frontend/assets/audio/bgm/Workin.mp3";
 let battleBgmOn = false;
 
 function startBattleBgm(enemy) {

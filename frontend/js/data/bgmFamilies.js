@@ -8,9 +8,9 @@ export const BGM_BY_FAMILY = {
   Internet: [ { url: "/frontend/assets/audio/bgm/Straight_Loop.ogg", introUrl: "/frontend/assets/audio/bgm/Straight_Intro.ogg" }
             ],
   Art: ["/frontend/assets/audio/bgm/Art_01.ogg"],
-  Cinephile: ["/assets/audio/bgm/Cinephile_01.ogg"],
+  Cinephile: ["/assets/audio/bgm/Art_01.ogg"],
   Disney: ["/frontend/assets/audio/bgm/Disney_01.ogg"],
-  Secret: ["/frontend/assets/audio/bgm/Code_01.ogg"]
+  Secret: ["/frontend/assets/audio/bgm/Straight_Loop.ogg"]
 
   // New style example:
   // Snob: [
