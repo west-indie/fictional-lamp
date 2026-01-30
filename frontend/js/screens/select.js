@@ -1184,7 +1184,7 @@ function getNameplateTitle(movie) {
 function getLocalPosterPath(movie) {
   const id = movie?.id ? String(movie.id) : "";
   if (!id) return null;
-  return `assets/posters/${id}.jpg`;
+  return `frontend/assets/posters/${id}.jpg`;
 }
 
 function detectKeyboardInput(mouse) {

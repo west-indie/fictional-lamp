@@ -48,7 +48,7 @@ function measure(ctx, s) {
 function getLocalPosterPath(movie) {
   const id = movie?.id ? String(movie.id) : "";
   if (!id) return null;
-  return `assets/posters/${id}.jpg`;
+  return `frontend/assets/posters/${id}.jpg`;
 }
 
 // ✅ tap/click helper (left = back, right = confirm)

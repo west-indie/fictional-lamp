@@ -28,12 +28,12 @@ function _getPosterImage(movieId) {
   img.onerror = () => {
     if (!rec.triedJpg) {
       rec.triedJpg = true;
-      img.src = `assets/posters/${movieId}.jpg`;
+      img.src = `frontend/assets/posters/${movieId}.jpg`;
       return;
     }
   };
 
-  img.src = `assets/posters/${movieId}.png`;
+  img.src = `frontend/assets/posters/${movieId}.png`;
   return rec;
 }
 
