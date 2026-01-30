@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Movie RPG</title>
+<style>
+  body {
+    margin: 0;
+    background: #000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+  }
+
+  /* Optional: a very subtle CRT overlay */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    /* faint horizontal bands */
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(255,255,255,0.02) 0px,
+      rgba(255,255,255,0.02) 1px,
+      rgba(0,0,0,0.02) 2px,
+      rgba(0,0,0,0.02) 4px
+    );
+    opacity: 0.35;
+    mix-blend-mode: overlay;
+  }
+
+  canvas {
+    /* IMPORTANT: stop forcing ultra-crisp nearest-neighbor */
+    image-rendering: pixelated;
+
+    width: 90vw;
+    max-width: 960px;
+    aspect-ratio: 4 / 3;
+    border: 4px solid #444;
+
+    /* CRT-lite: tiny softening + slight glow */
+    filter: blur(0.35px) brightness(1.0) contrast(1.05);
+
+    /* Helps some browsers render filters more consistently */
+    transform: translateZ(0);
+  }
+</style>
+
+</head>
+<body>
+  <canvas id="game" width="400" height="300"></canvas>
+
+  <script type="module">
+    import { update, render } from "./js/game.js";
+    import { Input } from "./js/ui.js";
+    import { createMouse } from "./js/core/MouseManager.js";
+
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+
+    // ✅ One unified pointer manager (mouse + touch + pen)
+    const mouse = createMouse(canvas);
+
+    Input.init();
+
+    function loop() {
+      update(mouse);
+      render(ctx);
+      // Reset one-frame pointer flags AFTER the frame has used them.
+      mouse.endFrame();
+      requestAnimationFrame(loop);
+    }
+
+    loop();
+  </script>
+</body>
+</html>
