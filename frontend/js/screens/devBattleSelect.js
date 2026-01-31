@@ -66,7 +66,7 @@ function getPosterSrc(movie) {
 
   if (direct) return direct;
 
-  return `assets/posters/${movie.id}.png`;
+  return `frontend/assets/posters/${movie.id}.png`;
 }
 
 function makePosterCache() {
