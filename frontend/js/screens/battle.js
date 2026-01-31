@@ -90,8 +90,16 @@ const actions = ["ATTACK", "DEFEND", "ITEM", "SPECIAL", "RUN"];
 // ✅ Hover state (mouse-only affordance; never required for gameplay)
 let hover = { kind: null, index: -1 };
 function setHover(next) {
-  hover = next || { kind: null, index: -1 };
+  const n = next || { kind: null, index: -1 };
+  const changed = hover.kind !== n.kind || hover.index !== n.index;
+  hover = n;
+
+  // ✅ Hover any option => play the same ping as arrow-key movement
+  if (changed && n.kind) {
+    try { playUIMoveBlip(); } catch {}
+  }
 }
+
 
 let battleInitialized = false;
 
@@ -639,202 +647,203 @@ function enemyAttack() {
 // =========================
 const BattleScreenObj = {
   update(mouse) {
-    if (!battleInitialized) initBattle();
+  if (!battleInitialized) initBattle();
 
-    // Reset hover each frame; screens will set cursor when relevant
-    hover = { kind: null, index: -1 };
-    if (mouse && typeof mouse.setCursor === "function") mouse.setCursor("default");
+  // ✅ Do NOT reset hover each frame — battleMouse clears it when not over UI.
+  // Keep cursor default each frame; battleMouse will set pointer when relevant.
+  if (mouse && typeof mouse.setCursor === "function") mouse.setCursor("default");
 
-    if (battleBg && typeof battleBg.tick === "function") battleBg.tick(1 / 60);
+  if (battleBg && typeof battleBg.tick === "function") battleBg.tick(1 / 60);
 
-    msgBox.tick();
+  msgBox.tick();
 
-    // ✅ Pause overlay is modal; while open, it owns input and blocks battle flow.
-    if (overlayMode === "pause") {
-      ensurePauseOverlay();
-      pauseOverlay.update(1 / 60, Input, mouse);
-      return;
+  // ✅ Pause overlay is modal; while open, it owns input and blocks battle flow.
+  if (overlayMode === "pause") {
+    ensurePauseOverlay();
+    pauseOverlay.update(1 / 60, Input, mouse);
+    return;
+  }
+
+  if (msgBox.isBusy()) {
+    if (Input.pressed("Enter") || mouse?.clicked) {
+      if (Input.pressed("Enter")) Input.consume("Enter");
+      if (mouse?.clicked) try { playUIConfirmBlip(); } catch {}
+      msgBox.advance();
     }
+    return;
+  }
 
-    if (msgBox.isBusy()) {
-      if (Input.pressed("Enter") || mouse?.clicked) {
-        if (Input.pressed("Enter")) Input.consume("Enter");
-        if (mouse?.clicked) try { playUIConfirmBlip(); } catch {}
-        msgBox.advance();
-      }
-      return;
-    }
+  if (state.phase === "victory" || state.phase === "defeat") {
+    stopBattleBgm();
+  }
 
-    if (state.phase === "victory" || state.phase === "defeat") {
-      stopBattleBgm();
-    }
+  // VICTORY
+  if (state.phase === "victory") {
+    if (Input.pressed("Enter") || mouse?.clicked) {
+      if (Input.pressed("Enter")) Input.consume("Enter");
+      if (mouse?.clicked) try { playUIConfirmBlip(); } catch {}
 
-    // VICTORY
-    if (state.phase === "victory") {
-      if (Input.pressed("Enter") || mouse?.clicked) {
-        if (Input.pressed("Enter")) Input.consume("Enter");
-        if (mouse?.clicked) try { playUIConfirmBlip(); } catch {}
+      ensureStatsState(GameState);
 
-        ensureStatsState(GameState);
+      const isQuickplay = state.battleRunMode === "quickplay";
+      const isCampaign = state.battleIsCampaign;
 
-        const isQuickplay = state.battleRunMode === "quickplay";
-        const isCampaign = state.battleIsCampaign;
+      incWins(GameState, 1);
+      recordWinForPartyMovies(GameState, GameState.party.movies);
 
-        incWins(GameState, 1);
-        recordWinForPartyMovies(GameState, GameState.party.movies);
+      const curLevel = GameState.currentLevel || 1;
+      const maxLevel = GameState.maxLevel || 15;
 
-        const curLevel = GameState.currentLevel || 1;
-        const maxLevel = GameState.maxLevel || 15;
-
-        const campaignCleared = isCampaign && curLevel >= maxLevel;
-        if (campaignCleared) {
-          setStat(GameState, "campaignCleared", true);
-          completeRatatouilleTrialIfActive(GameState);
-        }
-
-        evaluateUnlockRules(GameState);
-
-        battleInitialized = false;
-
-        GameState.enemy = null;
-        state.enemy = null;
-
-        if (isQuickplay) {
-          GameState.runMode = null;
-          GameState.enemyTemplate = null;
-          clearOneFourBattleApplyFlag(GameState);
-          changeScreen("menu");
-          return;
-        }
-
-        if (isCampaign && curLevel < maxLevel) {
-          GameState.currentLevel = curLevel + 1;
-          GameState.enemyTemplate = null;
-          changeScreen("levelIntro");
-        } else {
-          GameState.enemyTemplate = null;
-          clearOneFourBattleApplyFlag(GameState);
-          changeScreen("menu");
-        }
-      }
-      return;
-    }
-
-    // DEFEAT
-    if (state.phase === "defeat") {
-      if (Input.pressed("Enter") || mouse?.clicked) {
-        if (Input.pressed("Enter")) Input.consume("Enter");
-        if (mouse?.clicked) try { playUIConfirmBlip(); } catch {}
-
-        ensureStatsState(GameState);
-
-        const isQuickplay = GameState.runMode === "quickplay";
-        if (isQuickplay) GameState.runMode = null;
-
+      const campaignCleared = isCampaign && curLevel >= maxLevel;
+      if (campaignCleared) {
+        setStat(GameState, "campaignCleared", true);
         completeRatatouilleTrialIfActive(GameState);
+      }
 
-        if (state.defeatReason !== "RUN") incLosses(GameState, 1);
+      evaluateUnlockRules(GameState);
 
-        evaluateUnlockRules(GameState);
+      battleInitialized = false;
 
-        GameState.campaign = null;
-        GameState.party.movies = [null, null, null, null];
+      GameState.enemy = null;
+      state.enemy = null;
+
+      if (isQuickplay) {
+        GameState.runMode = null;
         GameState.enemyTemplate = null;
-        GameState.enemy = null;
-        GameState.currentLevel = 1;
-
-        battleInitialized = false;
-        state.enemy = null;
-
         clearOneFourBattleApplyFlag(GameState);
         changeScreen("menu");
-      }
-      return;
-    }
-
-    // Backspace opens PAUSE overlay ONLY when not in confirm-pending mode.
-    if (
-      (state.phase === "player" || state.phase === "enemy") &&
-      state.uiMode === "command" &&
-      Input.pressed("Backspace")
-    ) {
-      Input.consume("Backspace");
-      openPauseOverlay();
-      return;
-    }
-
-    // cancel (existing behavior) — unchanged
-    if (state.phase === "player" && cancelPressed()) {
-      Input.consume("Backspace");
-      if (cancelUI()) return;
-    }
-
-    // player phase
-    if (state.phase === "player") {
-      const toggleSpecialPage = (actor) =>
-        !!(
-          actor &&
-          toggleSpecialPageInState({
-            state,
-            actor,
-            movieMetaMap: movieMeta,
-            specialsMap: specials,
-            getResolvedSpecialsForActor
-          })
-        );
-
-      if (
-        handleBattleMouse({
-          mouse,
-          state,
-          SCREEN,
-          BATTLE_LAYOUT,
-          actions,
-          itemSlotsPerPage: ITEM_SLOTS_PER_PAGE,
-          battleActions,
-          clampItemPagingAndSelection,
-          getItemPageCount,
-          getItemPageStart,
-          toggleItemPageInState,
-          toggleSpecialPage,
-          getCurrentActor,
-          cancelUI,
-          openPauseOverlay,
-          playUIBackBlip,
-          playUIConfirmBlip,
-          playUIMoveBlip,
-          setHover
-        })
-      ) {
         return;
       }
 
-      handleBattleKeyboardInput({
+      if (isCampaign && curLevel < maxLevel) {
+        GameState.currentLevel = curLevel + 1;
+        GameState.enemyTemplate = null;
+        changeScreen("levelIntro");
+      } else {
+        GameState.enemyTemplate = null;
+        clearOneFourBattleApplyFlag(GameState);
+        changeScreen("menu");
+      }
+    }
+    return;
+  }
+
+  // DEFEAT
+  if (state.phase === "defeat") {
+    if (Input.pressed("Enter") || mouse?.clicked) {
+      if (Input.pressed("Enter")) Input.consume("Enter");
+      if (mouse?.clicked) try { playUIConfirmBlip(); } catch {}
+
+      ensureStatsState(GameState);
+
+      const isQuickplay = GameState.runMode === "quickplay";
+      if (isQuickplay) GameState.runMode = null;
+
+      completeRatatouilleTrialIfActive(GameState);
+
+      if (state.defeatReason !== "RUN") incLosses(GameState, 1);
+
+      evaluateUnlockRules(GameState);
+
+      GameState.campaign = null;
+      GameState.party.movies = [null, null, null, null];
+      GameState.enemyTemplate = null;
+      GameState.enemy = null;
+      GameState.currentLevel = 1;
+
+      battleInitialized = false;
+      state.enemy = null;
+
+      clearOneFourBattleApplyFlag(GameState);
+      changeScreen("menu");
+    }
+    return;
+  }
+
+  // Backspace opens PAUSE overlay ONLY when not in confirm-pending mode.
+  if (
+    (state.phase === "player" || state.phase === "enemy") &&
+    state.uiMode === "command" &&
+    Input.pressed("Backspace")
+  ) {
+    Input.consume("Backspace");
+    openPauseOverlay();
+    return;
+  }
+
+  // cancel (existing behavior) — unchanged
+  if (state.phase === "player" && cancelPressed()) {
+    Input.consume("Backspace");
+    if (cancelUI()) return;
+  }
+
+  // player phase
+  if (state.phase === "player") {
+    const toggleSpecialPage = (actor) =>
+      !!(
+        actor &&
+        toggleSpecialPageInState({
+          state,
+          actor,
+          movieMetaMap: movieMeta,
+          specialsMap: specials,
+          getResolvedSpecialsForActor
+        })
+      );
+
+    if (
+      handleBattleMouse({
+        mouse,
         state,
-        Input,
+        SCREEN,
+        BATTLE_LAYOUT,
         actions,
+        itemSlotsPerPage: ITEM_SLOTS_PER_PAGE,
         battleActions,
         clampItemPagingAndSelection,
+        getItemPageCount,
+        getItemPageStart,
         toggleItemPageInState,
-        moveItemCursorWithinCurrentPage,
-        moveTargetCursor,
-        getCurrentActor,
         toggleSpecialPage,
+        getCurrentActor,
+        cancelUI,
+        openPauseOverlay,
+        playUIBackBlip,
+        playUIConfirmBlip,
         playUIMoveBlip,
-        msgBox
-      });
-
+        setHover
+      })
+    ) {
       return;
     }
 
-    // enemy phase
-    if (state.phase === "enemy") {
-      if (Input.pressed("Enter")) {
-        Input.consume("Enter");
-        enemyAttack();
-      }
+    handleBattleKeyboardInput({
+      state,
+      Input,
+      actions,
+      battleActions,
+      clampItemPagingAndSelection,
+      toggleItemPageInState,
+      moveItemCursorWithinCurrentPage,
+      moveTargetCursor,
+      getCurrentActor,
+      toggleSpecialPage,
+      playUIMoveBlip,
+      msgBox
+    });
+
+    return;
+  }
+
+  // enemy phase
+  if (state.phase === "enemy") {
+    if (Input.pressed("Enter")) {
+      Input.consume("Enter");
+      enemyAttack();
     }
-  },
+  }
+},
+
 
   render(ctx) {
     // ✅ HARD RESET (prevents cumulative shrink/offset from leaked transforms)

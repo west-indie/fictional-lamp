@@ -31,12 +31,13 @@ export function handleBattleMouse({
   openPauseOverlay,
   playUIBackBlip,
   playUIConfirmBlip,
-  playUIMoveBlip,
+  playUIMoveBlip, // kept: used for Toggle click
   setHover
 }) {
   if (!mouse) return false;
   if (!(mouse.moved || mouse.pressed || mouse.released || mouse.clicked || mouse.down)) return false;
 
+  let hitSomething = false;
   const uiBaseY = BATTLE_LAYOUT.command.y;
 
   // --- confirm mode minis + command-row behavior ---
@@ -58,6 +59,7 @@ export function handleBattleMouse({
 
       if (pointInRect(mouse.x, mouse.y, backRect)) {
         hitAnyConfirmUi = true;
+        hitSomething = true;
         setHover({ kind: "miniBack", index: -1 });
         mouse.setCursor("pointer");
         if (mouse.clicked) {
@@ -67,6 +69,7 @@ export function handleBattleMouse({
         }
       } else if (pointInRect(mouse.x, mouse.y, rightRect)) {
         hitAnyConfirmUi = true;
+        hitSomething = true;
         setHover({ kind: "miniRight", index: -1 });
         mouse.setCursor("pointer");
         if (mouse.clicked) {
@@ -81,19 +84,22 @@ export function handleBattleMouse({
     }
 
     // Clicking on command buttons while confirm-pending:
-    // - Click SAME command again => execute
-    // - Click DIFFERENT command => cancel confirm mode and return to normal command UI
+    // - Click SAME command again => execute (confirm ping)
+    // - Click DIFFERENT command => cancel confirm mode (back ping)
     const { buttonW, buttonH } = getRowMetrics({ SCREEN, BATTLE_LAYOUT, slotCount: actions.length });
     for (let i = 0; i < actions.length; i++) {
       const bx = getRowButtonX(BATTLE_LAYOUT, i, buttonW);
       const r = { x: bx, y: uiBaseY, w: buttonW, h: buttonH };
       if (pointInRect(mouse.x, mouse.y, r)) {
         hitAnyConfirmUi = true;
+        hitSomething = true;
         setHover({ kind: "action", index: i });
         mouse.setCursor("pointer");
         state.actionIndex = i;
+
         if (mouse.clicked) {
           const clickedAct = actions[i];
+
           if (clickedAct === state.confirmAction) {
             try { playUIConfirmBlip(); } catch {}
             const act = state.confirmAction;
@@ -102,6 +108,7 @@ export function handleBattleMouse({
             if (act) battleActions.runConfirmedAction(act);
             return true;
           }
+
           try { playUIBackBlip(); } catch {}
           state.confirmAction = null;
           state.uiMode = "command";
@@ -111,7 +118,7 @@ export function handleBattleMouse({
       }
     }
 
-    // Clicked elsewhere: cancel confirm mode
+    // Clicked elsewhere: cancel confirm mode (back/cancel ping)
     if (mouse.clicked && !hitAnyConfirmUi) {
       try { playUIBackBlip(); } catch {}
       state.confirmAction = null;
@@ -132,8 +139,9 @@ export function handleBattleMouse({
       itemSlotsPerPage
     });
 
-    // Pause mini (left)
+    // Pause mini (left) — hover move ping handled by setHover; click opens overlay
     if ((state.phase === "player" || state.phase === "enemy") && pointInRect(mouse.x, mouse.y, backRect)) {
+      hitSomething = true;
       setHover({ kind: "pause", index: -1 });
       mouse.setCursor("pointer");
       if (mouse.clicked) {
@@ -142,15 +150,18 @@ export function handleBattleMouse({
       }
     }
 
-    // Action row
+    // Action row — click should play confirm ping
     for (let i = 0; i < actions.length; i++) {
       const bx = getRowButtonX(BATTLE_LAYOUT, i, buttonW);
       const r = { x: bx, y: uiBaseY, w: buttonW, h: buttonH };
       if (pointInRect(mouse.x, mouse.y, r)) {
+        hitSomething = true;
         setHover({ kind: "action", index: i });
         mouse.setCursor("pointer");
         state.actionIndex = i;
+
         if (mouse.clicked) {
+          try { playUIConfirmBlip(); } catch {}
           battleActions.handlePlayerActionFromCommand();
           if (state.uiMode === "item") clampItemPagingAndSelection();
           return true;
@@ -176,14 +187,20 @@ export function handleBattleMouse({
         itemSlotsPerPage
       });
 
+      // Back mini — click should play back ping
       if (pointInRect(mouse.x, mouse.y, backRect)) {
+        hitSomething = true;
         setHover({ kind: "miniBack", index: -1 });
         mouse.setCursor("pointer");
         if (mouse.clicked) {
+          try { playUIBackBlip(); } catch {}
           cancelUI();
           return true;
         }
-      } else if (pointInRect(mouse.x, mouse.y, rightRect)) {
+      }
+      // Toggle mini — click keeps move ping (like arrow key navigation)
+      else if (pointInRect(mouse.x, mouse.y, rightRect)) {
+        hitSomething = true;
         setHover({ kind: "miniRight", index: -1 });
         mouse.setCursor("pointer");
         if (mouse.clicked) {
@@ -193,16 +210,21 @@ export function handleBattleMouse({
         }
       }
 
+      // Item slots — click should play confirm ping
       for (let slot = 0; slot < itemSlotsPerPage; slot++) {
         const bx = getRowButtonX(BATTLE_LAYOUT, slot, buttonW);
         const r = { x: bx, y: uiBaseY, w: buttonW, h: buttonH };
         const idx = pageStart + slot;
         const hasItem = idx < state.inventory.length;
+
         if (hasItem && pointInRect(mouse.x, mouse.y, r)) {
+          hitSomething = true;
           setHover({ kind: "itemSlot", index: slot });
           mouse.setCursor("pointer");
           state.itemIndex = idx;
+
           if (mouse.clicked) {
+            try { playUIConfirmBlip(); } catch {}
             battleActions.confirmUseSelectedItem();
             return true;
           }
@@ -226,14 +248,20 @@ export function handleBattleMouse({
         itemSlotsPerPage
       });
 
+      // Back mini — click should play back ping
       if (pointInRect(mouse.x, mouse.y, backRect)) {
+        hitSomething = true;
         setHover({ kind: "miniBack", index: -1 });
         mouse.setCursor("pointer");
         if (mouse.clicked) {
+          try { playUIBackBlip(); } catch {}
           cancelUI();
           return true;
         }
-      } else if (pointInRect(mouse.x, mouse.y, rightRect)) {
+      }
+      // Toggle mini — click keeps move ping (like navigation)
+      else if (pointInRect(mouse.x, mouse.y, rightRect)) {
+        hitSomething = true;
         setHover({ kind: "miniRight", index: -1 });
         mouse.setCursor("pointer");
         if (mouse.clicked) {
@@ -244,16 +272,21 @@ export function handleBattleMouse({
         }
       }
 
+      // Special slots — click should play confirm ping
       for (let i = 0; i < count; i++) {
         const bx = getRowButtonX(BATTLE_LAYOUT, i, buttonW);
         const r = { x: bx, y: uiBaseY, w: buttonW, h: buttonH };
         const sp = state.specialsList[i];
         const ready = !!sp?.ready;
+
         if (ready && pointInRect(mouse.x, mouse.y, r)) {
+          hitSomething = true;
           setHover({ kind: "specialSlot", index: i });
           mouse.setCursor("pointer");
           state.specialIndex = i;
+
           if (mouse.clicked) {
+            try { playUIConfirmBlip(); } catch {}
             battleActions.confirmUseSelectedSpecial();
             return true;
           }
@@ -266,6 +299,7 @@ export function handleBattleMouse({
   // --- target modes: choose an ally ---
   if (state.uiMode === "itemTarget" || state.uiMode === "specialTarget") {
     let hitTarget = false;
+
     for (let i = 0; i < state.party.length; i++) {
       const m = state.party[i];
       if (!m) continue;
@@ -277,12 +311,16 @@ export function handleBattleMouse({
         w: BATTLE_LAYOUT.party.dx - 4,
         h: 76
       };
+
       if (pointInRect(mouse.x, mouse.y, r)) {
         hitTarget = true;
+        hitSomething = true;
         setHover({ kind: "target", index: i });
         mouse.setCursor("pointer");
         state.targetIndex = i;
+
         if (mouse.clicked) {
+          try { playUIConfirmBlip(); } catch {}
           if (state.uiMode === "itemTarget") battleActions.confirmUseItemOnTarget();
           else battleActions.confirmUseSpecialOnTarget();
           return true;
@@ -291,12 +329,18 @@ export function handleBattleMouse({
       }
     }
 
-    // When using an item on a target, clicking anywhere not on a target acts as Back.
+    // In itemTarget, clicking anywhere not on a target acts as Back (back ping)
     if (state.uiMode === "itemTarget" && mouse.clicked && !hitTarget) {
       try { playUIBackBlip(); } catch {}
       cancelUI();
       return true;
     }
+  }
+
+  // ✅ If we didn't hit anything interactive, clear hover.
+  // This ensures hover-change pings re-trigger correctly when re-entering a button.
+  if (!hitSomething) {
+    setHover({ kind: null, index: -1 });
   }
 
   return false;
