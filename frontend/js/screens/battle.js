@@ -43,17 +43,11 @@ import {
   playUIBackBlip,
   playUIConfirmBlip,
   playUIMoveBlip,
-  setSfxVolume,
-  syncSfxVolumeFromSaved
+  setSfxVolume
 } from "../sfx/uiSfx.js";
 
 // ✅ BGM system
-import {
-  playBgm,
-  stopBgm,
-  setBgmVolume,
-  syncBgmVolumeFromSaved
-} from "../systems/audioSystem.js";
+import { playBgm, stopBgm, setBgmVolume } from "../systems/audioSystem.js";
 // ✅ Family-based BGM picker (renamed from bgmThemes -> bgmFamilies)
 import { pickFamilyBgm } from "../data/bgmFamilies.js";
 
@@ -72,6 +66,17 @@ import {
 
 import { createBattleActions } from "./battle/actions.js";
 
+// ✅ Module B/C/D refactor (behavior-preserving)
+import { handleBattleKeyboardInput } from "./battle/battleInput.js";
+import { handleBattleMouse } from "./battle/battleMouse.js";
+import {
+  drawCommandMenu,
+  drawConfirmMiniButtonsIfNeeded,
+  drawPauseMiniIfNeeded,
+  drawItemMenuLikeCommandRow,
+  drawSpecialMenu
+} from "../ui/battleMenus.js";
+
 // ✅ dynamic EarthBound-ish background (active region only)
 import { createBattleBackground } from "../ui/battleBackground.js";
 
@@ -84,9 +89,8 @@ const actions = ["ATTACK", "DEFEND", "ITEM", "SPECIAL", "RUN"];
 
 // ✅ Hover state (mouse-only affordance; never required for gameplay)
 let hover = { kind: null, index: -1 };
-
-function pointInRect(px, py, r) {
-  return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
+function setHover(next) {
+  hover = next || { kind: null, index: -1 };
 }
 
 let battleInitialized = false;
@@ -168,206 +172,6 @@ function stopBattleBgm() {
 // ===== small helpers =====
 function clamp(n, a, b) {
   return Math.max(a, Math.min(b, n));
-}
-
-function isSpacePressed() {
-  return Input.pressed("Space");
-}
-
-function consumeSpace() {
-  Input.consume("Space");
-}
-
-// ===== PAGE DOTS =====
-function drawPageDots(ctx, { xCenter, y, pageIndex, pageCount, dotRadius = 2, gap = 7 }) {
-  if (pageCount <= 1) return;
-
-  const totalWidth = (pageCount - 1) * gap;
-  const startX = xCenter - totalWidth / 2;
-
-  for (let i = 0; i < pageCount; i++) {
-    const cx = startX + i * gap;
-
-    if (i === pageIndex) {
-      ctx.fillStyle = "#fff";
-      ctx.beginPath();
-      ctx.arc(cx, y, dotRadius, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      ctx.strokeStyle = "#fff";
-      ctx.beginPath();
-      ctx.arc(cx, y, dotRadius, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-  }
-}
-
-// ======================================================
-// ✅ COMMAND ROW LAYOUT (fills entire X axis)
-// ✅ OLD ASPECT RATIO PRESERVED (55x25 => 11:5)
-// ======================================================
-const COMMAND_ASPECT_W = 11;
-const COMMAND_ASPECT_H = 5;
-
-const ROW_GAP = 5;
-
-function getRowMetrics(slotCount) {
-  const padX = BATTLE_LAYOUT.command.x; // treat as left+right padding
-  const usableW = SCREEN.W - padX * 2;
-  const gaps = ROW_GAP * (slotCount - 1);
-
-  const buttonW = Math.floor((usableW - gaps) / slotCount);
-  const buttonH = clamp(Math.round(buttonW * (COMMAND_ASPECT_H / COMMAND_ASPECT_W)), 20, 26);
-
-  return { padX, usableW, buttonW, buttonH };
-}
-
-function getRowButtonX(slotIndex, buttonW) {
-  const padX = BATTLE_LAYOUT.command.x;
-  return padX + slotIndex * (buttonW + ROW_GAP);
-}
-
-// ======================================================
-// ✅ TOP MINI BUTTONS (ITEM, SPECIAL, CONFIRM ONLY)
-// FIX: Mini button SIZE is CANONICAL across ALL menus.
-// - We compute miniW/miniH from the 5-slot row (same as ITEM row).
-// - Then we position them relative to whichever row is being drawn.
-//
-// ✅ NEW: In normal command mode, we draw ONLY the left mini button
-//        and label it "Pause" (same size/position as confirm mode's Back).
-//        In confirm mode, it remains "Back" + "Confirm" as before.
-// ======================================================
-const MINI_GAP_Y = 4;
-const MINI_H_MIN = 14;
-const MINI_H_MAX = 18;
-
-// Canonical sizing base: 5-slot row (same as items + command buttons)
-function getCanonicalMiniMetrics() {
-  const { buttonW, buttonH } = getRowMetrics(ITEM_SLOTS_PER_PAGE);
-  const miniW = Math.floor(buttonW / 2);
-  const miniH = clamp(Math.round(buttonH * 0.65), MINI_H_MIN, MINI_H_MAX);
-  return { miniW, miniH };
-}
-
-function getTopMiniRects({ uiBaseY, slotCount, buttonW }) {
-  const { miniW, miniH } = getCanonicalMiniMetrics();
-
-  const firstX = getRowButtonX(0, buttonW);
-  const lastX = getRowButtonX(slotCount - 1, buttonW);
-
-  const y = uiBaseY - miniH - MINI_GAP_Y;
-
-  const backRect = { x: firstX, y, w: miniW, h: miniH };
-
-  // right edge aligned to last button's right edge
-  const rightX = lastX + buttonW - miniW;
-  const rightRect = { x: rightX, y, w: miniW, h: miniH };
-
-  return { backRect, rightRect };
-}
-
-function drawMiniButton(ctx, rect, label, isHot = false) {
-  const { x, y, w, h } = rect;
-
-  ctx.fillStyle = "#000";
-  ctx.fillRect(x, y, w, h);
-
-  ctx.strokeStyle = isHot ? "#ff0" : "#fff";
-  ctx.strokeRect(x, y, w, h);
-
-  ctx.font = "7px monospace";
-  ctx.fillStyle = isHot ? "#ff0" : "#fff";
-
-  const tx = x + 4;
-  const ty = y + Math.floor(h * 0.68);
-  ctx.fillText(label, tx, ty);
-}
-
-function drawTopMiniButtons(ctx, { uiBaseY, slotCount, buttonW, rightLabel, hotBack = false, hotRight = false }) {
-  const { backRect, rightRect } = getTopMiniRects({ uiBaseY, slotCount, buttonW });
-
-  drawMiniButton(ctx, backRect, "Back", hotBack);
-  drawMiniButton(ctx, rightRect, rightLabel, hotRight);
-
-  return { backRect, rightRect };
-}
-
-function drawDotsAboveRightMini(ctx, rightRect, { pageIndex, pageCount }) {
-  if (pageCount <= 1) return;
-
-  const xCenter = rightRect.x + Math.floor(rightRect.w * 0.75); // biased right
-  const y = rightRect.y - 6;
-
-  drawPageDots(ctx, { xCenter, y, pageIndex, pageCount });
-}
-
-// ✅ NEW: command-mode pause mini (left mini only)
-function drawPauseMiniIfNeeded(ctx, uiBaseY, slotCount, buttonW) {
-  if (state.uiMode !== "command") return;
-
-  // In your current flow, we only want it during player/enemy phases (not victory/defeat screens)
-  if (state.phase !== "player" && state.phase !== "enemy") return;
-
-  const { backRect } = getTopMiniRects({ uiBaseY, slotCount, buttonW });
-  const hot = hover?.kind === "pause";
-  drawMiniButton(ctx, backRect, "Pause", hot);
-}
-
-// ======================================================
-
-function drawTwoLineButtonTextAdaptive(ctx, line1, line2, x, y, w, h) {
-  const pad = 4;
-
-  const l1 = (line1 || "").trim();
-  const l2 = (line2 || "").trim();
-
-  if (l2) {
-    const y1 = y + Math.floor(h * 0.45);
-    const y2 = y + Math.floor(h * 0.8);
-
-    ctx.fillText(l1, x + pad, y1);
-    ctx.fillText(l2, x + pad, y2);
-  } else {
-    const y1 = y + Math.floor(h * 0.65);
-    ctx.fillText(l1, x + pad, y1);
-  }
-}
-
-function wrapToTwoLines(ctx, text, maxWidth) {
-  const t = (text || "").trim();
-  if (!t) return ["", ""];
-
-  if (ctx.measureText(t).width <= maxWidth) return [t, ""];
-
-  const words = t.split(/\s+/);
-  if (words.length === 1) {
-    for (let i = 1; i < t.length; i++) {
-      const a = t.slice(0, i);
-      if (ctx.measureText(a).width > maxWidth) {
-        const a2 = t.slice(0, Math.max(1, i - 1));
-        const b2 = t.slice(Math.max(1, i - 1));
-        return [a2, b2];
-      }
-    }
-    return [t.slice(0, Math.floor(t.length / 2)), t.slice(Math.floor(t.length / 2))];
-  }
-
-  let best = null;
-  for (let i = 1; i < words.length; i++) {
-    const a = words.slice(0, i).join(" ");
-    const b = words.slice(i).join(" ");
-    const wa = ctx.measureText(a).width;
-    const wb = ctx.measureText(b).width;
-    if (wa <= maxWidth && wb <= maxWidth) {
-      const score = Math.abs(wa - wb);
-      if (!best || score < best.score) best = { a, b, score };
-    }
-  }
-
-  if (best) return [best.a, best.b];
-
-  const mid = Math.ceil(words.length / 2);
-  return [words.slice(0, mid).join(" "), words.slice(mid).join(" ")];
 }
 
 // ===== PROGRESSION HELPERS =====
@@ -649,7 +453,6 @@ function ensurePauseOverlay() {
     onReset: () => {},
 
     onSetMusicGain: (g01) => {
-      // ✅ This is correct: changes the master BGM gain immediately.
       try { setBgmVolume(g01); } catch {}
     },
 
@@ -681,7 +484,6 @@ function initBattle() {
 
   // ✅ NEW: Sync BGM bus to saved slider BEFORE starting battle music
   try { syncOptionsAudioNow(); } catch {}
-  
 
   msgBox.clear();
 
@@ -718,7 +520,6 @@ function initBattle() {
   // ✅ ensure pause overlay constructed (safe)
   ensurePauseOverlay();
 }
-
 
 function advanceToNextActor() {
   const n = state.party.length;
@@ -833,124 +634,6 @@ function enemyAttack() {
   });
 }
 
-// ===== RENDER HELPERS =====
-function drawCommandMenu(ctx, uiBaseY) {
-  const confirming = state.uiMode === "confirm" && !!state.confirmAction;
-  const { buttonW, buttonH } = getRowMetrics(actions.length);
-
-  actions.forEach((a, i) => {
-    const bx = getRowButtonX(i, buttonW);
-    const by = uiBaseY;
-
-    const isCursor = i === state.actionIndex && state.phase === "player";
-    const isLocked = confirming && a === state.confirmAction;
-    const isDisabled = confirming && a !== state.confirmAction;
-
-    if (isLocked) {
-      ctx.fillStyle = "#444";
-      ctx.fillRect(bx, by, buttonW, buttonH);
-      ctx.strokeStyle = "#ff0";
-    } else if (isDisabled) {
-      ctx.fillStyle = "#111";
-      ctx.fillRect(bx, by, buttonW, buttonH);
-      ctx.strokeStyle = "#555";
-    } else if (isCursor) {
-      ctx.fillStyle = "#444";
-      ctx.fillRect(bx, by, buttonW, buttonH);
-      ctx.strokeStyle = "#ff0";
-    } else {
-      ctx.fillStyle = "#000";
-      ctx.fillRect(bx, by, buttonW, buttonH);
-      const isHover = hover?.kind === "action" && hover?.index === i;
-      ctx.strokeStyle = isHover ? "#ff0" : "#fff";
-    }
-
-    ctx.strokeRect(bx, by, buttonW, buttonH);
-
-    ctx.font = "9px monospace";
-    ctx.fillStyle = isDisabled ? "#777" : "#fff";
-    ctx.fillText(a, bx + 4, by + Math.floor(buttonH * 0.65));
-  });
-}
-
-function drawConfirmMiniButtonsIfNeeded(ctx, uiBaseY, slotCount, buttonW) {
-  // Only show in confirm UI for ATTACK / DEFEND / RUN
-  if (state.uiMode !== "confirm") return;
-
-  const a = state.confirmAction;
-  if (a !== "ATTACK" && a !== "DEFEND" && a !== "RUN") return;
-
-  drawTopMiniButtons(ctx, {
-    uiBaseY,
-    slotCount,
-    buttonW,
-    rightLabel: "Confirm",
-    hotBack: hover?.kind === "miniBack",
-    hotRight: hover?.kind === "miniRight"
-  });
-}
-
-function drawItemMenuLikeCommandRow(ctx, uiBaseY) {
-  const pageCount = getItemPageCount();
-  const pageStart = getItemPageStart(state.itemsPageIndex);
-
-  const { buttonW, buttonH } = getRowMetrics(ITEM_SLOTS_PER_PAGE);
-
-  // minis (canonical size)
-  const { rightRect } = drawTopMiniButtons(ctx, {
-    uiBaseY,
-    slotCount: ITEM_SLOTS_PER_PAGE,
-    buttonW,
-    rightLabel: "Toggle",
-    hotBack: hover?.kind === "miniBack",
-    hotRight: hover?.kind === "miniRight"
-  });
-
-  // dots above right mini
-  if (pageCount > 1) {
-    drawDotsAboveRightMini(ctx, rightRect, {
-      pageIndex: state.itemsPageIndex,
-      pageCount
-    });
-  }
-
-  for (let slot = 0; slot < ITEM_SLOTS_PER_PAGE; slot++) {
-    const bx = getRowButtonX(slot, buttonW);
-    const by = uiBaseY;
-
-    const idx = pageStart + slot;
-    const hasItem = idx < state.inventory.length;
-    const isSelected = hasItem && idx === state.itemIndex && state.phase === "player";
-
-    if (isSelected) {
-      ctx.fillStyle = "#444";
-      ctx.fillRect(bx, by, buttonW, buttonH);
-      ctx.strokeStyle = "#ff0";
-    } else {
-      ctx.fillStyle = "#000";
-      ctx.fillRect(bx, by, buttonW, buttonH);
-      const isHover = hover?.kind === "itemSlot" && hover?.index === slot;
-      if (isHover && hasItem) ctx.strokeStyle = "#ff0";
-      else ctx.strokeStyle = hasItem ? "#fff" : "#555";
-    }
-
-    ctx.strokeRect(bx, by, buttonW, buttonH);
-
-    if (!hasItem) continue;
-
-    const entry = state.inventory[idx];
-    const def = getInventoryItemDef(entry);
-
-    const label = def ? def.shortTitle || def.name : "Unknown";
-    const line1 = (label || "Item").slice(0, 14);
-    const line2 = `x${entry.count}`;
-
-    ctx.font = "8px monospace";
-    ctx.fillStyle = "#fff";
-    drawTwoLineButtonTextAdaptive(ctx, line1, line2, bx, by, buttonW, buttonH);
-  }
-}
-
 // =========================
 // ✅ SCREEN EXPORT
 // =========================
@@ -966,10 +649,9 @@ const BattleScreenObj = {
 
     msgBox.tick();
 
-    // ✅ NEW: Pause overlay is modal; while open, it owns input and blocks battle flow.
+    // ✅ Pause overlay is modal; while open, it owns input and blocks battle flow.
     if (overlayMode === "pause") {
       ensurePauseOverlay();
-      // ✅ Mouse support for pause/options overlay
       pauseOverlay.update(1 / 60, Input, mouse);
       return;
     }
@@ -1070,9 +752,7 @@ const BattleScreenObj = {
       return;
     }
 
-    // ✅ NEW: Backspace opens PAUSE overlay ONLY when not in confirm-pending mode.
-    // - In confirm-pending mode: Backspace remains "cancel/back" as before.
-    // - In other UI modes: Backspace remains "cancel/back" as before.
+    // Backspace opens PAUSE overlay ONLY when not in confirm-pending mode.
     if (
       (state.phase === "player" || state.phase === "enemy") &&
       state.uiMode === "command" &&
@@ -1091,377 +771,58 @@ const BattleScreenObj = {
 
     // player phase
     if (state.phase === "player") {
-      // ✅ Mouse support (hover + click) for existing buttons/menus
-      if (mouse && (mouse.moved || mouse.pressed || mouse.released || mouse.clicked || mouse.down)) {
-        const uiBaseY = BATTLE_LAYOUT.command.y;
+      const toggleSpecialPage = (actor) =>
+        !!(
+          actor &&
+          toggleSpecialPageInState({
+            state,
+            actor,
+            movieMetaMap: movieMeta,
+            specialsMap: specials,
+            getResolvedSpecialsForActor
+          })
+        );
 
-        // --- confirm mode minis + command-row behavior ---
-        if (state.uiMode === "confirm") {
-          let hitAnyConfirmUi = false;
-          const a = state.confirmAction;
-
-          // Minis (back/confirm) only exist for simple confirms
-          if (a === "ATTACK" || a === "DEFEND" || a === "RUN") {
-            const { buttonW } = getRowMetrics(actions.length);
-            const { backRect, rightRect } = getTopMiniRects({ uiBaseY, slotCount: actions.length, buttonW });
-
-            if (pointInRect(mouse.x, mouse.y, backRect)) {
-              hitAnyConfirmUi = true;
-              hover = { kind: "miniBack", index: -1 };
-              mouse.setCursor("pointer");
-              if (mouse.clicked) {
-                try { playUIBackBlip(); } catch {}
-                cancelUI();
-                return;
-              }
-            } else if (pointInRect(mouse.x, mouse.y, rightRect)) {
-              hitAnyConfirmUi = true;
-              hover = { kind: "miniRight", index: -1 };
-              mouse.setCursor("pointer");
-              if (mouse.clicked) {
-                try { playUIConfirmBlip(); } catch {}
-                const act = state.confirmAction;
-                state.confirmAction = null;
-                state.uiMode = "command";
-                if (act) battleActions.runConfirmedAction(act);
-                return;
-              }
-            }
-          }
-
-          // ✅ Clicking on command buttons while confirm-pending:
-          // - Click SAME command again => execute
-          // - Click DIFFERENT command => cancel confirm mode and return to normal command UI
-          const { buttonW, buttonH } = getRowMetrics(actions.length);
-          for (let i = 0; i < actions.length; i++) {
-            const bx = getRowButtonX(i, buttonW);
-            const r = { x: bx, y: uiBaseY, w: buttonW, h: buttonH };
-            if (pointInRect(mouse.x, mouse.y, r)) {
-              hitAnyConfirmUi = true;
-              hover = { kind: "action", index: i };
-              mouse.setCursor("pointer");
-              state.actionIndex = i;
-              if (mouse.clicked) {
-                const clickedAct = actions[i];
-                if (clickedAct === state.confirmAction) {
-                  try { playUIConfirmBlip(); } catch {}
-                  const act = state.confirmAction;
-                  state.confirmAction = null;
-                  state.uiMode = "command";
-                  if (act) battleActions.runConfirmedAction(act);
-                  return;
-                }
-                // Different command: cancel confirm mode (Back behavior)
-                try { playUIBackBlip(); } catch {}
-                state.confirmAction = null;
-                state.uiMode = "command";
-                return;
-              }
-              break;
-            }
-          }
-
-          // Clicked elsewhere: cancel confirm mode
-          if (mouse.clicked && !hitAnyConfirmUi) {
-            try { playUIBackBlip(); } catch {}
-            state.confirmAction = null;
-            state.uiMode = "command";
-            return;
-          }
-        }
-
-        // --- command mode: pause mini + action buttons ---
-        if (state.uiMode === "command") {
-          const { buttonW, buttonH } = getRowMetrics(actions.length);
-          const { backRect } = getTopMiniRects({ uiBaseY, slotCount: actions.length, buttonW });
-
-          // Pause mini (left)
-          if ((state.phase === "player" || state.phase === "enemy") && pointInRect(mouse.x, mouse.y, backRect)) {
-            hover = { kind: "pause", index: -1 };
-            mouse.setCursor("pointer");
-            if (mouse.clicked) {
-              openPauseOverlay();
-              return;
-            }
-          }
-
-          // Action row
-          for (let i = 0; i < actions.length; i++) {
-            const bx = getRowButtonX(i, buttonW);
-            const r = { x: bx, y: uiBaseY, w: buttonW, h: buttonH };
-            if (pointInRect(mouse.x, mouse.y, r)) {
-              hover = { kind: "action", index: i };
-              mouse.setCursor("pointer");
-              // ✅ Unify selection: hover becomes the real selection.
-              state.actionIndex = i;
-              if (mouse.clicked) {
-                battleActions.handlePlayerActionFromCommand();
-                if (state.uiMode === "item") clampItemPagingAndSelection();
-                return;
-              }
-              break;
-            }
-          }
-        }
-
-        // --- item mode: minis + slots ---
-        if (state.uiMode === "item") {
-          if (state.inventory && state.inventory.length > 0) {
-            clampItemPagingAndSelection();
-            const pageCount = getItemPageCount();
-            const pageStart = getItemPageStart(state.itemsPageIndex);
-            const { buttonW, buttonH } = getRowMetrics(ITEM_SLOTS_PER_PAGE);
-            const { backRect, rightRect } = getTopMiniRects({ uiBaseY, slotCount: ITEM_SLOTS_PER_PAGE, buttonW });
-
-            if (pointInRect(mouse.x, mouse.y, backRect)) {
-              hover = { kind: "miniBack", index: -1 };
-              mouse.setCursor("pointer");
-              if (mouse.clicked) {
-                cancelUI();
-                return;
-              }
-            } else if (pointInRect(mouse.x, mouse.y, rightRect)) {
-              hover = { kind: "miniRight", index: -1 };
-              mouse.setCursor("pointer");
-              if (mouse.clicked) {
-                // Toggle page
-                toggleItemPageInState();
-                if (pageCount > 1 && typeof playUIMoveBlip === "function") playUIMoveBlip();
-                return;
-              }
-            }
-
-            for (let slot = 0; slot < ITEM_SLOTS_PER_PAGE; slot++) {
-              const bx = getRowButtonX(slot, buttonW);
-              const r = { x: bx, y: uiBaseY, w: buttonW, h: buttonH };
-              const idx = pageStart + slot;
-              const hasItem = idx < state.inventory.length;
-              if (hasItem && pointInRect(mouse.x, mouse.y, r)) {
-                hover = { kind: "itemSlot", index: slot };
-                mouse.setCursor("pointer");
-                // ✅ Hover becomes selection so keyboard starts here.
-                state.itemIndex = idx;
-                if (mouse.clicked) {
-                  battleActions.confirmUseSelectedItem();
-                  return;
-                }
-                break;
-              }
-            }
-          }
-        }
-
-        // --- special mode: minis + slots ---
-        if (state.uiMode === "special") {
-          if (state.specialsList && state.specialsList.length > 0) {
-            const count = state.specialsList.length;
-            const { buttonW, buttonH } = getRowMetrics(count);
-            const { backRect, rightRect } = getTopMiniRects({ uiBaseY, slotCount: count, buttonW });
-
-            if (pointInRect(mouse.x, mouse.y, backRect)) {
-              hover = { kind: "miniBack", index: -1 };
-              mouse.setCursor("pointer");
-              if (mouse.clicked) {
-                cancelUI();
-                return;
-              }
-            } else if (pointInRect(mouse.x, mouse.y, rightRect)) {
-              hover = { kind: "miniRight", index: -1 };
-              mouse.setCursor("pointer");
-              if (mouse.clicked) {
-                const actor = getCurrentActor();
-                const toggled =
-                  actor &&
-                  toggleSpecialPageInState({
-                    state,
-                    actor,
-                    movieMetaMap: movieMeta,
-                    specialsMap: specials,
-                    getResolvedSpecialsForActor
-                  });
-                if (toggled && typeof playUIMoveBlip === "function") playUIMoveBlip();
-                return;
-              }
-            }
-
-            for (let i = 0; i < count; i++) {
-              const bx = getRowButtonX(i, buttonW);
-              const r = { x: bx, y: uiBaseY, w: buttonW, h: buttonH };
-              const sp = state.specialsList[i];
-              const ready = !!sp?.ready;
-              if (ready && pointInRect(mouse.x, mouse.y, r)) {
-                hover = { kind: "specialSlot", index: i };
-                mouse.setCursor("pointer");
-                // ✅ Hover becomes selection so keyboard starts here.
-                state.specialIndex = i;
-                if (mouse.clicked) {
-                  battleActions.confirmUseSelectedSpecial();
-                  return;
-                }
-                break;
-              }
-            }
-          }
-        }
-
-        // --- target modes: choose an ally ---
-        if (state.uiMode === "itemTarget" || state.uiMode === "specialTarget") {
-          let hitTarget = false;
-          // Party slot hit regions (approximate: whole top slot width)
-          for (let i = 0; i < state.party.length; i++) {
-            const m = state.party[i];
-            if (!m) continue;
-            // Keep parity with keyboard cursor: only allow living allies.
-            if (m.hp <= 0) continue;
-
-            const r = {
-              x: BATTLE_LAYOUT.party.x + i * BATTLE_LAYOUT.party.dx,
-              y: BATTLE_LAYOUT.party.y - 6,
-              w: BATTLE_LAYOUT.party.dx - 4,
-              h: 76
-            };
-            if (pointInRect(mouse.x, mouse.y, r)) {
-              hitTarget = true;
-              hover = { kind: "target", index: i };
-              mouse.setCursor("pointer");
-              // ✅ Hover becomes selection so keyboard starts here.
-              state.targetIndex = i;
-              if (mouse.clicked) {
-                if (state.uiMode === "itemTarget") {
-                  battleActions.confirmUseItemOnTarget();
-                } else {
-                  battleActions.confirmUseSpecialOnTarget();
-                }
-                return;
-              }
-              break;
-            }
-          }
-
-          // ✅ Requested behavior: when using an item on a target, clicking anywhere *not* on a target acts as Back.
-          if (state.uiMode === "itemTarget" && mouse.clicked && !hitTarget) {
-            try { playUIBackBlip(); } catch {}
-            cancelUI();
-            return;
-          }
-        }
-      }
-
-      if (state.uiMode === "confirm") {
-        if (Input.pressed("Enter")) {
-          Input.consume("Enter");
-          const a = state.confirmAction;
-          state.confirmAction = null;
-          state.uiMode = "command";
-          if (a) battleActions.runConfirmedAction(a);
-        }
+      if (
+        handleBattleMouse({
+          mouse,
+          state,
+          SCREEN,
+          BATTLE_LAYOUT,
+          actions,
+          itemSlotsPerPage: ITEM_SLOTS_PER_PAGE,
+          battleActions,
+          clampItemPagingAndSelection,
+          getItemPageCount,
+          getItemPageStart,
+          toggleItemPageInState,
+          toggleSpecialPage,
+          getCurrentActor,
+          cancelUI,
+          openPauseOverlay,
+          playUIBackBlip,
+          playUIConfirmBlip,
+          playUIMoveBlip,
+          setHover
+        })
+      ) {
         return;
       }
 
-      if (state.uiMode === "command") {
-        if (Input.pressed("ArrowLeft")) {
-          Input.consume("ArrowLeft");
-          state.actionIndex = (state.actionIndex - 1 + actions.length) % actions.length;
-        }
-        if (Input.pressed("ArrowRight")) {
-          Input.consume("ArrowRight");
-          state.actionIndex = (state.actionIndex + 1) % actions.length;
-        }
-        if (Input.pressed("Enter")) {
-          Input.consume("Enter");
-          battleActions.handlePlayerActionFromCommand();
-          if (state.uiMode === "item") clampItemPagingAndSelection();
-        }
-      } else if (state.uiMode === "item") {
-        if (state.inventory.length > 0) {
-          clampItemPagingAndSelection();
-
-          if (isSpacePressed()) {
-            const changed = toggleItemPageInState();
-            consumeSpace();
-            if (changed && typeof playUIMoveBlip === "function") playUIMoveBlip();
-          }
-
-          if (Input.pressed("ArrowLeft")) {
-            Input.consume("ArrowLeft");
-            moveItemCursorWithinCurrentPage(-1);
-          }
-          if (Input.pressed("ArrowRight")) {
-            Input.consume("ArrowRight");
-            moveItemCursorWithinCurrentPage(1);
-          }
-          if (Input.pressed("Enter")) {
-            Input.consume("Enter");
-            battleActions.confirmUseSelectedItem();
-          }
-        } else {
-          state.uiMode = "command";
-          msgBox.queue(["You have no items!"], () => {
-            state.actionIndex = 0;
-          });
-        }
-      } else if (state.uiMode === "itemTarget") {
-        if (Input.pressed("ArrowLeft")) {
-          Input.consume("ArrowLeft");
-          moveTargetCursor(-1);
-        }
-        if (Input.pressed("ArrowRight")) {
-          Input.consume("ArrowRight");
-          moveTargetCursor(1);
-        }
-        if (Input.pressed("Enter")) {
-          Input.consume("Enter");
-          battleActions.confirmUseItemOnTarget();
-        }
-      } else if (state.uiMode === "special") {
-        const actor = getCurrentActor();
-
-        if (isSpacePressed()) {
-          const toggled =
-            actor &&
-            toggleSpecialPageInState({
-              state,
-              actor,
-              movieMetaMap: movieMeta,
-              specialsMap: specials,
-              getResolvedSpecialsForActor
-            });
-
-          consumeSpace();
-          if (toggled && typeof playUIMoveBlip === "function") playUIMoveBlip();
-        }
-
-        if (state.specialsList.length > 0) {
-          if (Input.pressed("ArrowLeft")) {
-            Input.consume("ArrowLeft");
-            state.specialIndex =
-              (state.specialIndex - 1 + state.specialsList.length) % state.specialsList.length;
-          }
-          if (Input.pressed("ArrowRight")) {
-            Input.consume("ArrowRight");
-            state.specialIndex = (state.specialIndex + 1) % state.specialsList.length;
-          }
-          if (Input.pressed("Enter")) {
-            Input.consume("Enter");
-            battleActions.confirmUseSelectedSpecial();
-          }
-        } else {
-          state.uiMode = "command";
-        }
-      } else if (state.uiMode === "specialTarget") {
-        if (Input.pressed("ArrowLeft")) {
-          Input.consume("ArrowLeft");
-          moveTargetCursor(-1);
-        }
-        if (Input.pressed("ArrowRight")) {
-          Input.consume("ArrowRight");
-          moveTargetCursor(1);
-        }
-        if (Input.pressed("Enter")) {
-          Input.consume("Enter");
-          battleActions.confirmUseSpecialOnTarget();
-        }
-      }
+      handleBattleKeyboardInput({
+        state,
+        Input,
+        actions,
+        battleActions,
+        clampItemPagingAndSelection,
+        toggleItemPageInState,
+        moveItemCursorWithinCurrentPage,
+        moveTargetCursor,
+        getCurrentActor,
+        toggleSpecialPage,
+        playUIMoveBlip,
+        msgBox
+      });
 
       return;
     }
@@ -1513,18 +874,37 @@ const BattleScreenObj = {
     const uiBaseY = BATTLE_LAYOUT.command.y;
 
     if (state.uiMode === "command" || state.uiMode === "confirm") {
-      drawCommandMenu(ctx, uiBaseY);
+      drawCommandMenu(ctx, {
+        SCREEN,
+        BATTLE_LAYOUT,
+        uiBaseY,
+        actions,
+        state,
+        hover
+      });
 
-      // ✅ NEW: In normal command mode, show PAUSE mini (left position).
-      // In confirm mode, show Back/Confirm minis as before.
       if (state.uiMode === "command") {
-        const { buttonW } = getRowMetrics(actions.length);
-        drawPauseMiniIfNeeded(ctx, uiBaseY, actions.length, buttonW);
+        drawPauseMiniIfNeeded(ctx, {
+          SCREEN,
+          BATTLE_LAYOUT,
+          uiBaseY,
+          actions,
+          itemSlotsPerPage: ITEM_SLOTS_PER_PAGE,
+          state,
+          hover
+        });
       }
 
       if (state.uiMode === "confirm") {
-        const { buttonW } = getRowMetrics(actions.length);
-        drawConfirmMiniButtonsIfNeeded(ctx, uiBaseY, actions.length, buttonW);
+        drawConfirmMiniButtonsIfNeeded(ctx, {
+          SCREEN,
+          BATTLE_LAYOUT,
+          uiBaseY,
+          actions,
+          itemSlotsPerPage: ITEM_SLOTS_PER_PAGE,
+          state,
+          hover
+        });
       }
     } else if (state.uiMode === "item") {
       ctx.font = "8px monospace";
@@ -1534,68 +914,31 @@ const BattleScreenObj = {
         ctx.fillText("No items!", BATTLE_LAYOUT.command.x, uiBaseY + 16);
       } else {
         clampItemPagingAndSelection();
-        drawItemMenuLikeCommandRow(ctx, uiBaseY);
+        drawItemMenuLikeCommandRow(ctx, {
+          SCREEN,
+          BATTLE_LAYOUT,
+          uiBaseY,
+          itemSlotsPerPage: ITEM_SLOTS_PER_PAGE,
+          getItemPageCount,
+          getItemPageStart,
+          getInventoryItemDef,
+          state,
+          hover,
+          itemsPageIndex: state.itemsPageIndex
+        });
       }
     } else if (state.uiMode === "special") {
-      ctx.font = "8px monospace";
-
-      if (!state.specialsList || state.specialsList.length === 0) {
-        ctx.fillStyle = "#fff";
-        ctx.fillText("No specials!", BATTLE_LAYOUT.command.x, uiBaseY + 22);
-      } else {
-        const count = state.specialsList.length;
-        const { buttonW, buttonH } = getRowMetrics(count);
-
-        // minis (canonical size, same as item)
-        const { rightRect } = drawTopMiniButtons(ctx, {
-          uiBaseY,
-          slotCount: count,
-          buttonW,
-          rightLabel: "Toggle",
-          hotBack: hover?.kind === "miniBack",
-          hotRight: hover?.kind === "miniRight"
-        });
-
-        state.specialsList.forEach((sp, i) => {
-          const bx = getRowButtonX(i, buttonW);
-          const by = uiBaseY;
-          const isSelected = i === state.specialIndex;
-
-          const ready = !!sp.ready;
-
-          if (isSelected && state.phase === "player") {
-            ctx.fillStyle = ready ? "#444" : "#222";
-            ctx.fillRect(bx, by, buttonW, buttonH);
-            ctx.strokeStyle = "#ff0";
-          } else {
-            ctx.fillStyle = "#000";
-            ctx.fillRect(bx, by, buttonW, buttonH);
-            const isHover = hover?.kind === "specialSlot" && hover?.index === i;
-            if (isHover && ready) ctx.strokeStyle = "#ff0";
-            else ctx.strokeStyle = ready ? "#fff" : "#555";
-          }
-
-          ctx.strokeRect(bx, by, buttonW, buttonH);
-
-          ctx.font = "8px monospace";
-          ctx.fillStyle = ready ? "#fff" : "#777";
-
-          const maxTextW = buttonW - 8;
-          const [l1, l2] = wrapToTwoLines(ctx, sp.name || "Special", maxTextW);
-          drawTwoLineButtonTextAdaptive(ctx, l1, l2, bx, by, buttonW, buttonH);
-        });
-
-        const actor = getCurrentActor();
-        if (canToggleSpecialPages(actor)) {
-          const pageCount = getSpecialPageCount(actor.movie.id);
-          if (pageCount > 1 && state.specialsList.length > 0) {
-            drawDotsAboveRightMini(ctx, rightRect, {
-              pageIndex: state.specialsPageIndex,
-              pageCount
-            });
-          }
-        }
-      }
+      drawSpecialMenu(ctx, {
+        SCREEN,
+        BATTLE_LAYOUT,
+        uiBaseY,
+        itemSlotsPerPage: ITEM_SLOTS_PER_PAGE,
+        state,
+        hover,
+        canToggleSpecialPages: (actor) => canToggleSpecialPages(actor),
+        getSpecialPageCount: (movieId) => getSpecialPageCount(movieId),
+        getCurrentActor
+      });
     }
 
     msgBox.render(ctx, {
@@ -1658,7 +1001,7 @@ const BattleScreenObj = {
       }
     });
 
-    // ✅ NEW: Render pause/options overlay on top (styled like unlock overlay)
+    // ✅ Render pause/options overlay on top
     if (overlayMode === "pause") {
       ensurePauseOverlay();
       pauseOverlay.render(ctx);
