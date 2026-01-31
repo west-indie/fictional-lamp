@@ -16,6 +16,15 @@
 // - This file applies buffs/debuffs as actor/enemy `statuses` with `*Pct` + `*Turns` keys.
 // - It supports temp shields via `actor.tempShield`.
 // - It does NOT globally tick status durations; keep that separate.
+//
+// ✅ Added support for "missing kinds" found in specials.js / your pages:
+// - debuffEnemy (alias of ENEMY_DEBUFF; supports both schemas)
+// - buffParty (team ATK/DEF buffs; supports both schemas)
+// - statusEnemy (alias of STATUS; enemy-default)
+//
+// ✅ HealTeamMissingPct now heals OR revives:
+// - living allies: heals a % of missing HP
+// - downed allies: revives to revivePct * maxHp (fallback: missingHealPct)
 
 import { imdbMultiplier } from "./imdbScaling.js";
 import { genreSpecials } from "../data/genreSpecials.js";
@@ -432,14 +441,29 @@ function signatureToUnified(movieId, signature) {
   let target = signature.target || null;
 
   if (!target) {
-    if (sigKind === "damageEnemy" || sigKind === "HIT" || sigKind === "ENEMY_DEBUFF" || sigKind === "STATUS") {
+    if (
+      sigKind === "damageEnemy" ||
+      sigKind === "HIT" ||
+      sigKind === "ENEMY_DEBUFF" ||
+      sigKind === "debuffEnemy" || // ✅ alias used in your specials
+      sigKind === "STATUS" ||
+      sigKind === "statusEnemy" // ✅ alias used in your specials
+    ) {
       target = ["enemy"];
-    } else if (sigKind === "healSelf" || sigKind === "SELF_BUFF") {
+    } else if (
+        sigKind === "healSelf" ||
+        sigKind === "healSelfMissingPct" ||
+        sigKind === "SELF_BUFF") {
       target = ["self"];
     } else if (sigKind === "healAlly" || sigKind === "healAllyMissingPct") {
       // default base tag only; author can add ["heal","revive"] etc. in specials.js
       target = ["ally"];
-    } else if (sigKind === "buffParty") {
+    } else if (
+      sigKind === "buffParty" ||
+      sigKind === "healTeam" ||
+      sigKind === "healTeamMissingPct" ||
+      sigKind === "healTeamBuff"
+    ) {
       target = ["team"];
     } else {
       target = ["enemy"];
@@ -462,7 +486,7 @@ function signatureToUnified(movieId, signature) {
     amount,
     cooldownTurns,
 
-    // passthrough fields
+    // passthrough fields (core)
     atkPct: signature.atkPct ?? null,
     defPct: signature.defPct ?? null,
     turns: signature.turns ?? null,
@@ -471,9 +495,30 @@ function signatureToUnified(movieId, signature) {
     shield: signature.shield ?? null,
     shieldPct: signature.shieldPct ?? null,
 
-    // custom behavior params
+    // custom behavior params (heals)
     missingHealPct: signature.missingHealPct ?? null,
     revivePct: signature.revivePct ?? null,
+
+    // ✅ additional passthrough fields used by your specials.js variants
+    selfDefDebuffPct: signature.selfDefDebuffPct ?? null,
+    selfDefDebuffTurns: signature.selfDefDebuffTurns ?? null,
+
+    atkBuffPct: signature.atkBuffPct ?? null,
+    atkBuffTurns: signature.atkBuffTurns ?? null,
+    defBuffPct: signature.defBuffPct ?? null,
+    defBuffTurns: signature.defBuffTurns ?? null,
+
+    atkDebuffPct: signature.atkDebuffPct ?? null,
+    atkDebuffTurns: signature.atkDebuffTurns ?? null,
+    defDebuffPct: signature.defDebuffPct ?? null,
+    defDebuffTurns: signature.defDebuffTurns ?? null,
+
+    damageReductionPct: signature.damageReductionPct ?? null,
+    damageReductionTurns: signature.damageReductionTurns ?? null,
+
+    nextHitVulnActive: signature.nextHitVulnActive ?? null,
+    nextHitVulnPct: signature.nextHitVulnPct ?? null,
+    nextHitVulnTurns: signature.nextHitVulnTurns ?? null,
 
     sigKind
   };
@@ -739,6 +784,54 @@ function executeSignature({ actor, party, enemy, special, targetIndex, M }) {
     return { lines, used: true, effects: { healedHp: healed } };
   }
 
+    // ✅ Heal self for a % of missing HP; revives if down
+  if (kind === "healSelfMissingPct") {
+    const maxHp = Number(actor.maxHp ?? actor.hpMax ?? actor?.stats?.maxHp ?? 0);
+
+    if (!maxHp || maxHp <= 0) {
+      return { lines: ["Max HP unknown."], used: false };
+    }
+
+    const pct = typeof special.missingHealPct === "number"
+      ? special.missingHealPct
+      : 0.5;
+
+    const revivePct = typeof special.revivePct === "number"
+      ? special.revivePct
+      : pct;
+
+    // Revive case
+    if (actor.hp <= 0) {
+      const revivedHp = clamp(roundInt(maxHp * revivePct), 1, maxHp);
+      actor.hp = revivedHp;
+
+      lines.push(`${title} uses ${special.name} and returns to the fight!`);
+      return {
+        lines,
+        used: true,
+        effects: { healedHp: revivedHp }
+      };
+    }
+
+    // Heal missing HP case
+    const missing = Math.max(0, maxHp - Number(actor.hp || 0));
+    const healAmt = roundInt(missing * pct);
+
+    if (healAmt <= 0) {
+      return { lines: [`${title} is already at full health.`], used: false };
+    }
+
+    actor.hp = clamp(actor.hp + healAmt, 0, maxHp);
+
+    lines.push(`${title} uses ${special.name} and restores ${healAmt} HP.`);
+    return {
+      lines,
+      used: true,
+      effects: { healedHp: healAmt }
+    };
+  }
+
+
   if (kind === "healAlly") {
     if (targetIndex == null || targetIndex < 0 || targetIndex >= party.length) {
       return { lines: ["Choose an ally target."], used: false };
@@ -751,7 +844,7 @@ function executeSignature({ actor, party, enemy, special, targetIndex, M }) {
     return { lines, used: true, effects: { healedHp: healed } };
   }
 
-    if (kind === "healTeam") {
+  if (kind === "healTeam") {
     if (!Array.isArray(party) || party.length === 0) {
       return { lines: ["No party to heal."], used: false };
     }
@@ -768,22 +861,35 @@ function executeSignature({ actor, party, enemy, special, targetIndex, M }) {
     return { lines, used: true, effects: { healedHp: totalHealed } };
   }
 
-    // ✅ Team heal for a % of each ally's missing HP (signature)
+  // ✅ Team heal for a % of each ally's missing HP (signature)
+  // ✅ ALSO revives downed allies to revivePct * maxHp (or missingHealPct if revivePct absent)
   if (kind === "healTeamMissingPct") {
     if (!Array.isArray(party) || party.length === 0) {
       return { lines: ["No party to heal."], used: false };
     }
 
     const pct = typeof special.missingHealPct === "number" ? special.missingHealPct : 0.5;
+    const revivePct = typeof special.revivePct === "number" ? special.revivePct : pct;
 
     let totalHealed = 0;
+    let revivedCount = 0;
 
     for (const m of party) {
-      if (!m || m.hp <= 0) continue; // living allies only
+      if (!m) continue;
 
       const maxHp = Number(m.maxHp ?? 0);
       if (maxHp <= 0) continue;
 
+      // Revive case
+      if (Number(m.hp || 0) <= 0) {
+        const revivedHp = clamp(roundInt(maxHp * revivePct), 1, maxHp);
+        m.hp = revivedHp;
+        totalHealed += revivedHp; // counts as "healed" for summary purposes
+        revivedCount += 1;
+        continue;
+      }
+
+      // Heal missing HP case
       const missing = Math.max(0, maxHp - Number(m.hp || 0));
       const healAmt = roundInt(missing * pct);
       if (healAmt <= 0) continue;
@@ -791,12 +897,16 @@ function executeSignature({ actor, party, enemy, special, targetIndex, M }) {
       totalHealed += applyHeal(m, healAmt);
     }
 
-    lines.push(`${title} uses ${special.name}! The team regains ${totalHealed} total HP.`);
+    if (totalHealed <= 0 && revivedCount <= 0) {
+      return { lines: ["The team is already fully recovered."], used: false };
+    }
+
+    const reviveText = revivedCount > 0 ? `, revived ${revivedCount}` : "";
+    lines.push(`${title} uses ${special.name}! The team regains ${totalHealed} total HP${reviveText}.`);
     return { lines, used: true, effects: { healedHp: totalHealed } };
   }
 
-
-    // ✅ Team heal + team buff (signature) using missingHealPct
+  // ✅ Team heal + team buff (signature) using missingHealPct
   if (kind === "healTeamBuff") {
     if (!Array.isArray(party) || party.length === 0) {
       return { lines: ["No party to affect."], used: false };
@@ -849,12 +959,20 @@ function executeSignature({ actor, party, enemy, special, targetIndex, M }) {
     return { lines, used: true, effects: { damageDealt: dmg } };
   }
 
-  if (kind === "ENEMY_DEBUFF") {
+  // ✅ ENEMY debuff + alias: debuffEnemy
+  if (kind === "ENEMY_DEBUFF" || kind === "debuffEnemy") {
     if (!enemy) return { lines: ["No enemy target."], used: false };
 
-    const turns = normalizeTurns(special.turns ?? 2, 2);
-    const atkDown = normalizePct(special.atkPct);
-    const defDown = normalizePct(special.defPct);
+    const turns = normalizeTurns(
+      special.turns ?? special.defDebuffTurns ?? special.atkDebuffTurns ?? 2,
+      2
+    );
+
+    // supports BOTH schemas:
+    // - authored schema: atkPct/defPct
+    // - existing schema: atkDebuffPct/defDebuffPct
+    const atkDown = normalizePct(special.atkPct ?? special.atkDebuffPct);
+    const defDown = normalizePct(special.defPct ?? special.defDebuffPct);
 
     if (atkDown > 0) setPctDebuff(enemy, "atk", atkDown, turns);
     if (defDown > 0) setPctDebuff(enemy, "def", defDown, turns);
@@ -928,8 +1046,50 @@ function executeSignature({ actor, party, enemy, special, targetIndex, M }) {
     };
   }
 
+  // ✅ NEW: team buff (signature) — supports BOTH schemas:
+  // - atkPct/defPct + turns
+  // - atkBuffPct/defBuffPct + atkBuffTurns/defBuffTurns
+  if (kind === "buffParty") {
+    if (!Array.isArray(party) || party.length === 0) {
+      return { lines: ["No party to buff."], used: false };
+    }
+
+    const turns = normalizeTurns(
+      special.turns ?? special.atkBuffTurns ?? special.defBuffTurns ?? 2,
+      2
+    );
+
+    const atkUp = normalizePct(special.atkPct ?? special.atkBuffPct);
+    const defUp = normalizePct(special.defPct ?? special.defBuffPct);
+
+    if (atkUp <= 0 && defUp <= 0) {
+      lines.push(`${title} uses ${special.name}, but it has no effect.`);
+      return { lines, used: true, effects: null };
+    }
+
+    for (const m of party) {
+      if (!m || m.hp <= 0) continue;
+      if (atkUp > 0) setPctBuff(m, "atk", atkUp, turns);
+      if (defUp > 0) setPctBuff(m, "def", defUp, turns);
+    }
+
+    lines.push(`${title} uses ${special.name}! Team buffs applied (${turns}T).`);
+
+    return {
+      lines,
+      used: true,
+      effects: {
+        atkBuffPct: atkUp,
+        atkBuffTurns: atkUp > 0 ? turns : 0,
+        defBuffPct: defUp,
+        defBuffTurns: defUp > 0 ? turns : 0
+      }
+    };
+  }
+
   // ✅ IMPORTANT CHANGE: STATUS target selection must use base target (supports tag arrays)
-  if (kind === "STATUS") {
+  // ✅ Alias: statusEnemy
+  if (kind === "STATUS" || kind === "statusEnemy") {
     const statusName = String(special.status || "").trim();
     if (!statusName) {
       lines.push(`${title} uses ${special.name}, but no status was specified.`);
@@ -953,8 +1113,12 @@ function executeSignature({ actor, party, enemy, special, targetIndex, M }) {
       }
       tgtObj = party[targetIndex];
       tgtLabel = tgtObj?.movie?.title ? tgtObj.movie.title.slice(0, 10) : "ally";
+    } else if (baseTarget === "team") {
+      // For now, team-status is not implemented; fall back to enemy unless you extend later.
+      tgtObj = enemy;
+      tgtLabel = enemy?.name || "the enemy";
     } else {
-      // enemy/team default to enemy for STATUS (unless you later implement team-status)
+      // enemy default
       tgtObj = enemy;
       tgtLabel = enemy?.name || "the enemy";
     }

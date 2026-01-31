@@ -3,6 +3,7 @@
 // Thin bootstrap layer that wires screens into the core state + renderer.
 // Also: global unlock processing (NOT in Quickplay).
 
+import { BootScreen } from "./screens/boot.js";
 import { MenuScreen } from "./screens/menu.js";
 import { SelectScreen } from "./screens/select.js";
 import { BattleScreen } from "./screens/battle.js";
@@ -30,6 +31,8 @@ export { GameState };
 ensureUnlockState(GameState);
 
 const screens = {
+  boot: BootScreen,
+
   menu: MenuScreen,
   select: SelectScreen,
   levelIntro: LevelIntroScreen,
@@ -42,9 +45,10 @@ const screens = {
   devBattleSelect: DevBattleSelectScreen
 };
 
-// ✅ Ensure there is always a valid current screen on boot
-if (!GameState.currentScreen || !screens[GameState.currentScreen]) {
-  GameState.currentScreen = "menu";
+// ✅ Always start on BootScreen on page load (audio unlock gate).
+// Only skip boot if you're explicitly starting in a dev-only screen.
+if (GameState.currentScreen !== "devBattleSelect") {
+  GameState.currentScreen = "boot";
 }
 
 // ✅ Screen-aware changeScreen:

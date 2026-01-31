@@ -87,19 +87,24 @@ import { syncOptionsAudioNow } from "../systems/optionsAudioSync.js";
 
 const actions = ["ATTACK", "DEFEND", "ITEM", "SPECIAL", "RUN"];
 
+let mouseSelectEnabled = true;
+
 // ✅ Hover state (mouse-only affordance; never required for gameplay)
 let hover = { kind: null, index: -1 };
+
 function setHover(next) {
-  const n = next || { kind: null, index: -1 };
+  const n =
+    next && typeof next === "object"
+      ? next
+      : { kind: null, index: -1 };
+
   const changed = hover.kind !== n.kind || hover.index !== n.index;
   hover = n;
 
-  // ✅ Hover any option => play the same ping as arrow-key movement
   if (changed && n.kind) {
     try { playUIMoveBlip(); } catch {}
   }
 }
-
 
 let battleInitialized = false;
 
@@ -138,6 +143,9 @@ const state = {
 
 const QUIRKY_EXTRA_TURN_CHANCE = 0.08;
 const FUNNY_DISRUPT_CHANCE = 0.05;
+
+// ✅ DEFEND duration (in enemy phases). Easy to change.
+const DEFEND_ENEMY_PHASES = 2;
 
 // ===== Message Box =====
 const msgBox = createBattleMessageBox({ playTextBlip });
@@ -539,6 +547,8 @@ function advanceToNextActor() {
     state.uiMode = "command";
     state.confirmAction = null;
     state.actionIndex = 0;
+    // ✅ NEW: end of team turn → clear any mouse hover highlight
+    setHover({ kind: null, index: -1 });
     msgBox.queue(["Press Enter to Continue."], null);
   } else {
     state.currentActorIndex = next;
@@ -578,6 +588,39 @@ function cancelUI() {
   return true;
 }
 
+// ======================================================
+// ✅ RENDER-ONLY STATE: ensures ONLY ONE highlight at a time
+// - If hover is active, suppress selection highlight everywhere.
+// - Optionally map selection index to hovered slot so help panel matches.
+// ======================================================
+function getRenderStateForUi() {
+  if (!hover || !hover.kind) return state;
+
+  const rs = { ...state };
+
+  // Suppress any "selected" highlight while hovering something
+  rs.actionIndex = -1;
+  rs.itemIndex = -1;
+  rs.specialIndex = -1;
+
+  // If hovering a slot, align the render index to that slot (visual + help panel coherence)
+  if (rs.uiMode === "command" || rs.uiMode === "confirm") {
+    if (hover.kind === "action") rs.actionIndex = hover.index;
+  } else if (rs.uiMode === "item") {
+    if (hover.kind === "itemSlot") {
+      const pageStart = getItemPageStart(rs.itemsPageIndex);
+      const idx = pageStart + hover.index;
+      if (idx >= 0 && idx < rs.inventory.length) rs.itemIndex = idx;
+    }
+  } else if (rs.uiMode === "special") {
+    if (hover.kind === "specialSlot") rs.specialIndex = hover.index;
+  } else if (rs.uiMode === "itemTarget" || rs.uiMode === "specialTarget") {
+    if (hover.kind === "target") rs.targetIndex = hover.index;
+  }
+
+  return rs;
+}
+
 // ===== ACTIONS MODULE =====
 const battleActions = createBattleActions({
   state,
@@ -588,22 +631,38 @@ const battleActions = createBattleActions({
     executeSpecial,
     awardXpToParty,
     syncPartyProgressToGameState,
-
     queueMessages: (lines, onDone) => msgBox.queue(lines, onDone),
     getCurrentActor,
     advanceToNextActor,
     getFirstAliveIndex,
-
     movieMetaMap: movieMeta,
-
     getSignatureMapForActorPage: (actor, pageIndex) => getSignatureMapForActorPage(actor, pageIndex),
     resolveSpecialsForActorCurrentPage: (actor) => resolveSpecialsForActorCurrentPage(actor),
-
     getInventoryItemDef,
+    QUIRKY_EXTRA_TURN_CHANCE,
 
-    QUIRKY_EXTRA_TURN_CHANCE
+    // ✅ NEW
+    DEFEND_ENEMY_PHASES
   }
 });
+
+function tickDefendEnemyPhaseCounters() {
+  for (const m of state.party) {
+    if (!m) continue;
+
+    const left = m.defendEnemyPhasesLeft;
+    if (!Number.isFinite(left) || left <= 0) continue;
+
+    const next = left - 1;
+    if (next <= 0) {
+      m.defendEnemyPhasesLeft = 0;
+      m.isDefending = false;
+    } else {
+      m.defendEnemyPhasesLeft = next;
+    }
+  }
+}
+
 
 // ===== ENEMY TURN =====
 function enemyAttack() {
@@ -630,6 +689,9 @@ function enemyAttack() {
       return;
     }
 
+    // ✅ NEW: one tick per enemy phase
+    tickDefendEnemyPhaseCounters();
+
     state.phase = "player";
     state.currentActorIndex = getFirstAliveIndex(state.party);
     state.uiMode = "command";
@@ -642,211 +704,229 @@ function enemyAttack() {
   });
 }
 
+
 // =========================
 // ✅ SCREEN EXPORT
 // =========================
 const BattleScreenObj = {
   update(mouse) {
-  if (!battleInitialized) initBattle();
+    if (!battleInitialized) initBattle();
 
-  // ✅ Do NOT reset hover each frame — battleMouse clears it when not over UI.
-  // Keep cursor default each frame; battleMouse will set pointer when relevant.
-  if (mouse && typeof mouse.setCursor === "function") mouse.setCursor("default");
+    // Keep cursor default each frame; battleMouse will set pointer when relevant.
+    if (mouse && typeof mouse.setCursor === "function") mouse.setCursor("default");
 
-  if (battleBg && typeof battleBg.tick === "function") battleBg.tick(1 / 60);
+    // If the mouse moved this frame, mouse can own selection again
+    if (mouse?.moved) mouseSelectEnabled = true;
 
-  msgBox.tick();
+    if (battleBg && typeof battleBg.tick === "function") battleBg.tick(1 / 60);
 
-  // ✅ Pause overlay is modal; while open, it owns input and blocks battle flow.
-  if (overlayMode === "pause") {
-    ensurePauseOverlay();
-    pauseOverlay.update(1 / 60, Input, mouse);
-    return;
-  }
+    msgBox.tick();
 
-  if (msgBox.isBusy()) {
-    if (Input.pressed("Enter") || mouse?.clicked) {
-      if (Input.pressed("Enter")) Input.consume("Enter");
-      if (mouse?.clicked) try { playUIConfirmBlip(); } catch {}
-      msgBox.advance();
-    }
-    return;
-  }
-
-  if (state.phase === "victory" || state.phase === "defeat") {
-    stopBattleBgm();
-  }
-
-  // VICTORY
-  if (state.phase === "victory") {
-    if (Input.pressed("Enter") || mouse?.clicked) {
-      if (Input.pressed("Enter")) Input.consume("Enter");
-      if (mouse?.clicked) try { playUIConfirmBlip(); } catch {}
-
-      ensureStatsState(GameState);
-
-      const isQuickplay = state.battleRunMode === "quickplay";
-      const isCampaign = state.battleIsCampaign;
-
-      incWins(GameState, 1);
-      recordWinForPartyMovies(GameState, GameState.party.movies);
-
-      const curLevel = GameState.currentLevel || 1;
-      const maxLevel = GameState.maxLevel || 15;
-
-      const campaignCleared = isCampaign && curLevel >= maxLevel;
-      if (campaignCleared) {
-        setStat(GameState, "campaignCleared", true);
-        completeRatatouilleTrialIfActive(GameState);
-      }
-
-      evaluateUnlockRules(GameState);
-
-      battleInitialized = false;
-
-      GameState.enemy = null;
-      state.enemy = null;
-
-      if (isQuickplay) {
-        GameState.runMode = null;
-        GameState.enemyTemplate = null;
-        clearOneFourBattleApplyFlag(GameState);
-        changeScreen("menu");
-        return;
-      }
-
-      if (isCampaign && curLevel < maxLevel) {
-        GameState.currentLevel = curLevel + 1;
-        GameState.enemyTemplate = null;
-        changeScreen("levelIntro");
-      } else {
-        GameState.enemyTemplate = null;
-        clearOneFourBattleApplyFlag(GameState);
-        changeScreen("menu");
-      }
-    }
-    return;
-  }
-
-  // DEFEAT
-  if (state.phase === "defeat") {
-    if (Input.pressed("Enter") || mouse?.clicked) {
-      if (Input.pressed("Enter")) Input.consume("Enter");
-      if (mouse?.clicked) try { playUIConfirmBlip(); } catch {}
-
-      ensureStatsState(GameState);
-
-      const isQuickplay = GameState.runMode === "quickplay";
-      if (isQuickplay) GameState.runMode = null;
-
-      completeRatatouilleTrialIfActive(GameState);
-
-      if (state.defeatReason !== "RUN") incLosses(GameState, 1);
-
-      evaluateUnlockRules(GameState);
-
-      GameState.campaign = null;
-      GameState.party.movies = [null, null, null, null];
-      GameState.enemyTemplate = null;
-      GameState.enemy = null;
-      GameState.currentLevel = 1;
-
-      battleInitialized = false;
-      state.enemy = null;
-
-      clearOneFourBattleApplyFlag(GameState);
-      changeScreen("menu");
-    }
-    return;
-  }
-
-  // Backspace opens PAUSE overlay ONLY when not in confirm-pending mode.
-  if (
-    (state.phase === "player" || state.phase === "enemy") &&
-    state.uiMode === "command" &&
-    Input.pressed("Backspace")
-  ) {
-    Input.consume("Backspace");
-    openPauseOverlay();
-    return;
-  }
-
-  // cancel (existing behavior) — unchanged
-  if (state.phase === "player" && cancelPressed()) {
-    Input.consume("Backspace");
-    if (cancelUI()) return;
-  }
-
-  // player phase
-  if (state.phase === "player") {
-    const toggleSpecialPage = (actor) =>
-      !!(
-        actor &&
-        toggleSpecialPageInState({
-          state,
-          actor,
-          movieMetaMap: movieMeta,
-          specialsMap: specials,
-          getResolvedSpecialsForActor
-        })
-      );
-
-    if (
-      handleBattleMouse({
-        mouse,
-        state,
-        SCREEN,
-        BATTLE_LAYOUT,
-        actions,
-        itemSlotsPerPage: ITEM_SLOTS_PER_PAGE,
-        battleActions,
-        clampItemPagingAndSelection,
-        getItemPageCount,
-        getItemPageStart,
-        toggleItemPageInState,
-        toggleSpecialPage,
-        getCurrentActor,
-        cancelUI,
-        openPauseOverlay,
-        playUIBackBlip,
-        playUIConfirmBlip,
-        playUIMoveBlip,
-        setHover
-      })
-    ) {
+    // Pause overlay is modal; while open, it owns input and blocks battle flow.
+    if (overlayMode === "pause") {
+      ensurePauseOverlay();
+      pauseOverlay.update(1 / 60, Input, mouse);
       return;
     }
 
-    handleBattleKeyboardInput({
-      state,
-      Input,
-      actions,
-      battleActions,
-      clampItemPagingAndSelection,
-      toggleItemPageInState,
-      moveItemCursorWithinCurrentPage,
-      moveTargetCursor,
-      getCurrentActor,
-      toggleSpecialPage,
-      playUIMoveBlip,
-      msgBox
-    });
-
-    return;
-  }
-
-  // enemy phase
-  if (state.phase === "enemy") {
-    if (Input.pressed("Enter")) {
-      Input.consume("Enter");
-      enemyAttack();
+    if (msgBox.isBusy()) {
+      if (Input.pressed("Enter") || mouse?.clicked) {
+        if (Input.pressed("Enter")) Input.consume("Enter");
+        if (mouse?.clicked) try { playUIConfirmBlip(); } catch {}
+        msgBox.advance();
+      }
+      return;
     }
-  }
-},
 
+    // ✅ Safety: never show hover highlights outside player phase
+    if (state.phase !== "player" && hover?.kind) {
+      setHover({ kind: null, index: -1 });
+    }
+
+
+    if (state.phase === "victory" || state.phase === "defeat") {
+      stopBattleBgm();
+    }
+
+    // VICTORY
+    if (state.phase === "victory") {
+      if (Input.pressed("Enter") || mouse?.clicked) {
+        if (Input.pressed("Enter")) Input.consume("Enter");
+        if (mouse?.clicked) try { playUIConfirmBlip(); } catch {}
+
+        ensureStatsState(GameState);
+
+        const isQuickplay = state.battleRunMode === "quickplay";
+        const isCampaign = state.battleIsCampaign;
+
+        incWins(GameState, 1);
+        recordWinForPartyMovies(GameState, GameState.party.movies);
+
+        const curLevel = GameState.currentLevel || 1;
+        const maxLevel = GameState.maxLevel || 15;
+
+        const campaignCleared = isCampaign && curLevel >= maxLevel;
+        if (campaignCleared) {
+          setStat(GameState, "campaignCleared", true);
+          completeRatatouilleTrialIfActive(GameState);
+        }
+
+        evaluateUnlockRules(GameState);
+
+        battleInitialized = false;
+
+        GameState.enemy = null;
+        state.enemy = null;
+
+        if (isQuickplay) {
+          GameState.runMode = null;
+          GameState.enemyTemplate = null;
+          clearOneFourBattleApplyFlag(GameState);
+          changeScreen("menu");
+          return;
+        }
+
+        if (isCampaign && curLevel < maxLevel) {
+          GameState.currentLevel = curLevel + 1;
+          GameState.enemyTemplate = null;
+          changeScreen("levelIntro");
+        } else {
+          GameState.enemyTemplate = null;
+          clearOneFourBattleApplyFlag(GameState);
+          changeScreen("menu");
+        }
+      }
+      return;
+    }
+
+    // DEFEAT
+    if (state.phase === "defeat") {
+      if (Input.pressed("Enter") || mouse?.clicked) {
+        if (Input.pressed("Enter")) Input.consume("Enter");
+        if (mouse?.clicked) try { playUIConfirmBlip(); } catch {}
+
+        ensureStatsState(GameState);
+
+        const isQuickplay = GameState.runMode === "quickplay";
+        if (isQuickplay) GameState.runMode = null;
+
+        completeRatatouilleTrialIfActive(GameState);
+
+        if (state.defeatReason !== "RUN") incLosses(GameState, 1);
+
+        evaluateUnlockRules(GameState);
+
+        GameState.campaign = null;
+        GameState.party.movies = [null, null, null, null];
+        GameState.enemyTemplate = null;
+        GameState.enemy = null;
+        GameState.currentLevel = 1;
+
+        battleInitialized = false;
+        state.enemy = null;
+
+        clearOneFourBattleApplyFlag(GameState);
+        changeScreen("menu");
+      }
+      return;
+    }
+
+    // Backspace opens PAUSE overlay ONLY when not in confirm-pending mode.
+    if (
+      (state.phase === "player" || state.phase === "enemy") &&
+      state.uiMode === "command" &&
+      Input.pressed("Backspace")
+    ) {
+      Input.consume("Backspace");
+      openPauseOverlay();
+      return;
+    }
+
+    // cancel (existing behavior) — unchanged
+    if (state.phase === "player" && cancelPressed()) {
+      Input.consume("Backspace");
+      if (cancelUI()) return;
+    }
+
+    // player phase
+    if (state.phase === "player") {
+      const toggleSpecialPage = (actor) =>
+        !!(
+          actor &&
+          toggleSpecialPageInState({
+            state,
+            actor,
+            movieMetaMap: movieMeta,
+            specialsMap: specials,
+            getResolvedSpecialsForActor
+          })
+        );
+
+      // KEYBOARD FIRST:
+      handleBattleKeyboardInput({
+        state,
+        Input,
+        actions,
+        battleActions,
+        clampItemPagingAndSelection,
+        toggleItemPageInState,
+        moveItemCursorWithinCurrentPage,
+        moveTargetCursor,
+        getCurrentActor,
+        toggleSpecialPage,
+        playUIMoveBlip,
+        msgBox,
+
+        onKeyboardNavigate: () => {
+          mouseSelectEnabled = false;
+        }
+      });
+
+      // MOUSE SECOND:
+      if (
+        handleBattleMouse({
+          mouse,
+          state,
+          SCREEN,
+          BATTLE_LAYOUT,
+          actions,
+          itemSlotsPerPage: ITEM_SLOTS_PER_PAGE,
+          battleActions,
+          clampItemPagingAndSelection,
+          getItemPageCount,
+          getItemPageStart,
+          toggleItemPageInState,
+          toggleSpecialPage,
+          getCurrentActor,
+          cancelUI,
+          openPauseOverlay,
+          playUIBackBlip,
+          playUIConfirmBlip,
+          playUIMoveBlip,
+          setHover,
+          mouseSelectEnabled
+        })
+      ) {
+        return;
+      }
+
+      return;
+    }
+
+    // enemy phase
+    if (state.phase === "enemy") {
+      if (Input.pressed("Enter") || mouse?.clicked || mouse?.tapped) {
+        if (Input.pressed("Enter")) Input.consume("Enter");
+        if (mouse?.clicked || mouse?.tapped) {
+          try { playUIConfirmBlip(); } catch {}
+        }
+        enemyAttack();
+      }
+    }
+  },
 
   render(ctx) {
-    // ✅ HARD RESET (prevents cumulative shrink/offset from leaked transforms)
+    // HARD RESET (prevents cumulative shrink/offset from leaked transforms)
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.imageSmoothingEnabled = false;
 
@@ -859,66 +939,69 @@ const BattleScreenObj = {
     const width = SCREEN.W;
     const height = SCREEN.H;
 
-    // ✅ render dynamic background ONLY in active region
+    // render dynamic background ONLY in active region
     if (battleBg && typeof battleBg.render === "function") {
       battleBg.render(ctx, { x: 0, y: ACTIVE_Y });
     }
 
-    // ✅ draw letterbox bars LAST (solid black, always)
+    // draw letterbox bars LAST (solid black, always)
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, SCREEN.W, TOP_BAR_H);
     ctx.fillRect(0, SCREEN.H - BOTTOM_BAR_H, SCREEN.W, BOTTOM_BAR_H);
 
+    // ✅ RENDER-ONLY state enforces "single highlight"
+    const renderState = getRenderStateForUi();
+
     const indicatorIndex =
-      state.uiMode === "itemTarget" || state.uiMode === "specialTarget"
-        ? state.targetIndex
-        : state.currentActorIndex;
+      renderState.uiMode === "itemTarget" || renderState.uiMode === "specialTarget"
+        ? renderState.targetIndex
+        : renderState.currentActorIndex;
 
     renderBattleCharacterSlots(ctx, {
-      state,
+      state: renderState,
       BATTLE_LAYOUT,
       indicatorIndex
     });
 
     const uiBaseY = BATTLE_LAYOUT.command.y;
 
-    if (state.uiMode === "command" || state.uiMode === "confirm") {
+    if (renderState.uiMode === "command" || renderState.uiMode === "confirm") {
       drawCommandMenu(ctx, {
         SCREEN,
         BATTLE_LAYOUT,
         uiBaseY,
         actions,
-        state,
+        state: renderState,
         hover
       });
 
-      if (state.uiMode === "command") {
+      if (renderState.uiMode === "command") {
         drawPauseMiniIfNeeded(ctx, {
           SCREEN,
           BATTLE_LAYOUT,
           uiBaseY,
           actions,
           itemSlotsPerPage: ITEM_SLOTS_PER_PAGE,
-          state,
+          state: renderState,
           hover
         });
       }
 
-      if (state.uiMode === "confirm") {
+      if (renderState.uiMode === "confirm") {
         drawConfirmMiniButtonsIfNeeded(ctx, {
           SCREEN,
           BATTLE_LAYOUT,
           uiBaseY,
           actions,
           itemSlotsPerPage: ITEM_SLOTS_PER_PAGE,
-          state,
+          state: renderState,
           hover
         });
       }
-    } else if (state.uiMode === "item") {
+    } else if (renderState.uiMode === "item") {
       ctx.font = "8px monospace";
 
-      if (state.inventory.length === 0) {
+      if (renderState.inventory.length === 0) {
         ctx.fillStyle = "#fff";
         ctx.fillText("No items!", BATTLE_LAYOUT.command.x, uiBaseY + 16);
       } else {
@@ -931,18 +1014,18 @@ const BattleScreenObj = {
           getItemPageCount,
           getItemPageStart,
           getInventoryItemDef,
-          state,
+          state: renderState,
           hover,
-          itemsPageIndex: state.itemsPageIndex
+          itemsPageIndex: renderState.itemsPageIndex
         });
       }
-    } else if (state.uiMode === "special") {
+    } else if (renderState.uiMode === "special") {
       drawSpecialMenu(ctx, {
         SCREEN,
         BATTLE_LAYOUT,
         uiBaseY,
         itemSlotsPerPage: ITEM_SLOTS_PER_PAGE,
-        state,
+        state: renderState,
         hover,
         canToggleSpecialPages: (actor) => canToggleSpecialPages(actor),
         getSpecialPageCount: (movieId) => getSpecialPageCount(movieId),
@@ -959,38 +1042,38 @@ const BattleScreenObj = {
 
       getHelpPanelText: () => {
         const base = getBattleHelpPanelText({
-          phase: state.phase,
-          uiMode: state.uiMode,
+          phase: renderState.phase,
+          uiMode: renderState.uiMode,
           actor: getCurrentActor(),
           isMessageBusy: () => msgBox.isBusy(),
 
           actions,
-          actionIndex: state.actionIndex,
+          actionIndex: renderState.actionIndex,
           actionDescriptions: ACTION_DESCRIPTIONS,
 
-          confirmAction: state.confirmAction,
+          confirmAction: renderState.confirmAction,
 
-          inventory: state.inventory,
-          itemIndex: state.itemIndex,
+          inventory: renderState.inventory,
+          itemIndex: renderState.itemIndex,
           itemPageCount: getItemPageCount(),
           getInventoryItemDef,
 
-          pendingItemIndex: state.pendingItemIndex,
-          targetIndex: state.targetIndex,
-          party: state.party,
+          pendingItemIndex: renderState.pendingItemIndex,
+          targetIndex: renderState.targetIndex,
+          party: renderState.party,
 
-          specialsList: state.specialsList,
-          specialIndex: state.specialIndex,
-          pendingSpecial: state.pendingSpecial,
+          specialsList: renderState.specialsList,
+          specialIndex: renderState.specialIndex,
+          pendingSpecial: renderState.pendingSpecial,
 
           canToggleSpecialPages: (actor) => canToggleSpecialPages(actor),
           getSpecialPageCount: (movieId) => getSpecialPageCount(movieId),
-          specialsPageIndex: state.specialsPageIndex
+          specialsPageIndex: renderState.specialsPageIndex
         });
 
-        if (state.uiMode === "item" && state.inventory.length > 0) {
+        if (renderState.uiMode === "item" && renderState.inventory.length > 0) {
           const actor = getCurrentActor();
-          const entry = state.inventory[state.itemIndex];
+          const entry = renderState.inventory[renderState.itemIndex];
           const def = entry ? getInventoryItemDef(entry) : null;
 
           const movieName =
@@ -1010,7 +1093,7 @@ const BattleScreenObj = {
       }
     });
 
-    // ✅ Render pause/options overlay on top
+    // Render pause/options overlay on top
     if (overlayMode === "pause") {
       ensurePauseOverlay();
       pauseOverlay.render(ctx);

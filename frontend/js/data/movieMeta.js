@@ -33,6 +33,31 @@ export const movieMeta = {
   office_space: { primaryGenre: "COMEDY", secondaryGenre: null, tone: "FUNNY", year: 1999, franchise: ["JUDGE"] },
   this_is_spinal_tap: { primaryGenre: "COMEDY", secondaryGenre: "MUSICAL", tone: "QUIRKY", year: 1984, franchise: null },
 
+
+  harry_potter_2001: {
+    primaryGenre: "FANTASY",
+    secondaryGenre: "ADVENTURE",
+    tone: "QUIRKY",
+    year: 2001,
+    franchise: ["Harry Potter"]
+  },
+
+  love_and_mercy: {
+    primaryGenre: "DRAMA",
+    secondaryGenre: "MUSICAL",
+    tone: "SERIOUS",
+    year: 2014,
+    franchise: null
+  },
+
+  steve_jobs_2015: {
+    primaryGenre: "DRAMA",
+    secondaryGenre: null,
+    tone: "SERIOUS",
+    year: 2015,
+    franchise: ["Apple", "Steve Jobs"]
+  },
+
   // =========================
   // Blockbusters / Adventure / Franchise
   // =========================

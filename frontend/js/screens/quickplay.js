@@ -5,7 +5,7 @@ import { SCREEN, QUICKPLAY_LAYOUT, QUICKPLAY_SCREEN_LAYOUT as L } from "../layou
 import { Input } from "../ui.js";
 import { movies } from "../data/movies.js";
 import { playerArchetypes } from "../data/playerArchetypes.js";
-import { playUIBackBlip, playUIMoveBlip } from "../sfx/uiSfx.js";
+import { playUIBackBlip, playUIMoveBlip, playUIConfirmBlip } from "../sfx/uiSfx.js";
 
 import { renderUnlockArcOverlay } from "./unlockArcOverlay.js";
 import { ensureUnlockState, isArchetypeUnlocked } from "../systems/unlockSystem.js";
@@ -56,6 +56,8 @@ let overlayPayload = null;
 
 let confirmPending = false;
 let confirmedIndex = null;
+
+let enterArmed = false; // ✅ prevents leaked Confirm from previous screen
 
 // Mouse hover affordance for preview icon buttons
 let hoverPreviewLeft = false;
@@ -571,13 +573,13 @@ function handleUnlockEvents() {
 export const QuickplayScreen = {
   enter() {
     resetQuickplayUIState();
+    enterArmed = false;
 
-    // ✅ Apply saved volumes immediately (safe even if buses not ready yet)
     try { syncOptionsAudioNow(); } catch {}
-
-    // ✅ Quickplay wants NAV mix; do NOT start/resume here (autoplay-safe)
     try { MenuLayers.setMix(NAV_MIX, 0); } catch {}
   },
+
+
 
   update(mouse) {
     ensureUnlockState(GameState);
@@ -613,6 +615,9 @@ export const QuickplayScreen = {
     const archetypes = getQuickplayArchetypes();
     ensureSelectionValid(archetypes);
 
+    // ✅ Arm confirm only after Confirm is released once on this screen
+    if (!Input.isDown("Confirm")) enterArmed = true;
+
     // --- UNLOCK MODE ---
     if (uiMode === "unlock") {
       if (consumeBackIfPressed()) {
@@ -622,7 +627,9 @@ export const QuickplayScreen = {
         return;
       }
 
-      if (consumeConfirmIfPressed()) {
+      if (enterArmed && consumeConfirmIfPressed()) {
+        enterArmed = false;
+
         GameState.enemyTemplate = null;
         GameState.enemy = null;
         GameState.currentLevel = 1;
@@ -637,11 +644,10 @@ export const QuickplayScreen = {
 
         resetConfirm();
 
-        // ✅ Leaving nav flow: stop layered stems before battle music
         try { MenuLayers.stop({ fadeMs: 180 }); } catch {}
-
         changeScreen("battle");
       }
+
       return;
     }
 
@@ -654,11 +660,80 @@ export const QuickplayScreen = {
     }
 
     if (confirmPending) {
-      if (consumeConfirmIfPressed()) {
+      // ✅ Mouse/tap behavior while confirm-pending:
+      // - Clicking the RIGHT icon confirms (with confirm blip)
+      // - Clicking ANYWHERE ELSE cancels confirmPending (with back blip)
+      if (mouse && (mouse.moved || mouse.clicked || mouse.tapped || mouse.down || mouse.pressed)) {
+        let cursor = "default";
+
+        hoverPreviewLeft = false;
+        hoverPreviewRight = false;
+
+        const idx = confirmedIndex == null ? getSelectedIndex(archetypes) : confirmedIndex;
+        const selected = archetypes[idx];
+
+        if (selected) {
+          const postersY = Number(L?.preview?.postersY ?? 175);
+          const row = getPreviewRowLayout(SCREEN.W);
+          const btnY = postersY + Math.floor((row.posterH - PREVIEW_BTN_SIZE) / 2);
+
+          const leftRect = { x: row.leftBtnX, y: btnY, w: PREVIEW_BTN_SIZE, h: PREVIEW_BTN_SIZE };
+          const rightRect = { x: row.rightBtnX, y: btnY, w: PREVIEW_BTN_SIZE, h: PREVIEW_BTN_SIZE };
+
+          const didTap = !!(mouse.clicked || mouse.tapped);
+
+          const inLeft =
+            mouse.x >= leftRect.x &&
+            mouse.x <= leftRect.x + leftRect.w &&
+            mouse.y >= leftRect.y &&
+            mouse.y <= leftRect.y + leftRect.h;
+
+          const inRight =
+            mouse.x >= rightRect.x &&
+            mouse.x <= rightRect.x + rightRect.w &&
+            mouse.y >= rightRect.y &&
+            mouse.y <= rightRect.y + rightRect.h;
+
+          // hover affordance
+          if (inLeft) {
+            hoverPreviewLeft = true;
+            cursor = "pointer";
+          }
+          if (inRight) {
+            hoverPreviewRight = true;
+            cursor = "pointer";
+          }
+
+          // ✅ On tap/click:
+          if (didTap) {
+            // RIGHT icon = confirm/start
+            if (inRight) {
+              try { playUIConfirmBlip(); } catch {}
+              const chosen = archetypes[idx] || archetypes[0];
+              beginBattleFromArchetype(chosen);
+              return;
+            }
+
+            // ANYWHERE ELSE = cancel
+            try { playUIBackBlip(); } catch {}
+            resetConfirm();
+            if (typeof mouse.setCursor === "function") mouse.setCursor("default");
+            return;
+          }
+        }
+
+        if (typeof mouse.setCursor === "function") mouse.setCursor(cursor);
+      }
+
+      // ✅ Keyboard confirm still works
+      if (enterArmed && consumeConfirmIfPressed()) {
+        enterArmed = false;
+        try { playUIConfirmBlip(); } catch {}
         const idx = confirmedIndex == null ? getSelectedIndex(archetypes) : confirmedIndex;
         const chosen = archetypes[idx] || archetypes[0];
         beginBattleFromArchetype(chosen);
       }
+
       return;
     }
 
@@ -781,7 +856,8 @@ export const QuickplayScreen = {
       ensureSelectionValid(archetypes);
     }
 
-    if (consumeConfirmIfPressed()) {
+    if (enterArmed && consumeConfirmIfPressed()) {
+      enterArmed = false;
       confirmPending = true;
       confirmedIndex = getSelectedIndex(archetypes);
     }
@@ -801,13 +877,13 @@ export const QuickplayScreen = {
     ctx.fillText("Quickplay: Pick Archetype", L.title.x, L.title.y);
 
     // Subtitle
-    ctx.fillStyle = L?.subtitle?.color || "#fff";
+    ctx.fillStyle = L?.subtitle?.color || "#777";
     ctx.font = L?.subtitle?.font || "10px monospace";
     if (uiMode === "select" && confirmPending) {
-      ctx.fillText("Confirm Start   Back Cancel", L.subtitle.x, L.subtitle.y);
+      ctx.fillText("Ready to Start Battle?", L.subtitle.x, L.subtitle.y);
     } else {
       ctx.fillText(
-        "Move: Arrows/WASD   Confirm: Enter   Back: Esc/Backspace",
+        "Which One are You?",
         L.subtitle.x,
         L.subtitle.y
       );
@@ -910,26 +986,51 @@ export const QuickplayScreen = {
         }
 
         if (confirmPending) {
-          const boxW = L.preview.confirmBoxW;
-          const boxH = L.preview.confirmBoxH;
-          const bx = Math.floor((width - boxW) / 2);
-          const by = L.preview.confirmBoxY;
+          const shownName = selected.quickName || selected.name;
 
+          // ✅ Safe read + fallback (prevents crashes if layout missing)
+          const c = L?.preview?.confirm || {};
+          const box = c.box || { x: 20, y: 120, w: 360, h: 18 };
+
+          const x = Math.floor(Number(box.x ?? 20));
+          const y = Math.floor(Number(box.y ?? 120));
+          const w = Math.floor(Number(box.w ?? 360));
+          const h = Math.floor(Number(box.h ?? 18));
+
+          // Box
           ctx.fillStyle = "#000";
-          ctx.fillRect(bx, by, boxW, boxH);
+          ctx.fillRect(x, y, w, h);
 
           ctx.strokeStyle = "#fff";
-          ctx.strokeRect(bx, by, boxW, boxH);
+          ctx.strokeRect(x, y, w, h);
 
-          ctx.fillStyle = L?.preview?.color || "#ff0";
-          ctx.font = L?.preview?.font || "10px monospace";
+          // Text styling
+          ctx.fillStyle = c.color || "#ff0";
+          ctx.font = c.font || "10px monospace";
 
-          const padX = Number(L?.preview?.padX ?? 10);
-          const textY = Number(L?.preview?.textY ?? 16);
+          // Build message
+          const template = String(c.template || "Confirmed: {name}  |  Confirm Start  |  Back Cancel");
+          const msg = template.replace("{name}", shownName).slice(0, 64);
 
-          const shownName = selected.quickName || selected.name;
-          const msg = `Confirmed: ${shownName}  |  Confirm Start  |  Back Cancel`;
-          ctx.fillText(msg.slice(0, 64), bx + padX, by + textY);
+          // Vertical position (baseline)
+          const textY = Number.isFinite(c.textY) ? c.textY : 16;
+          const ty = y + textY;
+
+          // Horizontal alignment
+          const align = String(c.align || "left").toLowerCase();
+          const padX = Number.isFinite(c.padX) ? c.padX : 10;
+
+          let tx = x + padX;
+
+          if (align === "center") {
+            const textW = ctx.measureText(msg).width;
+            tx = x + Math.floor((w - textW) / 2);
+          } else if (align === "right") {
+            const textW = ctx.measureText(msg).width;
+            tx = x + w - padX - Math.ceil(textW);
+          }
+
+          ctx.fillText(msg, tx, ty);
         }
       }
     }
