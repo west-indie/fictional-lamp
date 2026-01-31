@@ -108,6 +108,9 @@ export function renderBattleCharacterSlots(ctx, opts) {
   // Rough monospace width at 10px
   const CHAR_W = 6;
 
+  // ✅ Defend tint (change this to whatever color you want)
+  const DEFEND_TINT = "#0ff";
+
   state.party.forEach((member, i) => {
     if (!member) return;
 
@@ -144,7 +147,7 @@ export function renderBattleCharacterSlots(ctx, opts) {
     // If you still want SHD/DEFEND, it becomes a 6th line.
     // If you truly want max 5 lines always, delete this block.
     if (member.tempShield > 0) lines.push(`SHD: ${member.tempShield}`);
-    else if (member.isDefending) lines.push("DEFEND");
+    // ✅ Removed "DEFEND" text line entirely; defend now shows via tint instead.
 
     // ✅ Center the text block vertically relative to the poster
     const textBlockH = lines.length * LINE_H;
@@ -157,8 +160,11 @@ export function renderBattleCharacterSlots(ctx, opts) {
       ctx.fillText("▼", x + Math.floor(slotW / 2) - 3, posterY - 2);
     }
 
+    // ✅ Choose slot UI color (white normally, tinted while defending)
+    const slotUI = member.isDefending ? DEFEND_TINT : "#fff";
+
     // Poster box
-    ctx.strokeStyle = "#fff";
+    ctx.strokeStyle = slotUI;
     ctx.strokeRect(posterX, posterY, POSTER_W, POSTER_H);
 
     // Poster (no border)
@@ -166,15 +172,14 @@ export function renderBattleCharacterSlots(ctx, opts) {
     const rec = _getPosterImage(movieId);
 
     if (rec && rec.ready) {
-    ctx.drawImage(rec.img, posterX, posterY, POSTER_W, POSTER_H);
+      ctx.drawImage(rec.img, posterX, posterY, POSTER_W, POSTER_H);
     } else {
-    ctx.fillStyle = "#111";
-    ctx.fillRect(posterX, posterY, POSTER_W, POSTER_H);
+      ctx.fillStyle = "#111";
+      ctx.fillRect(posterX, posterY, POSTER_W, POSTER_H);
     }
 
-
     // Draw text lines
-    ctx.fillStyle = "#fff";
+    ctx.fillStyle = slotUI;
     for (let li = 0; li < lines.length; li++) {
       ctx.fillText(lines[li], textX, textStartY + li * LINE_H);
     }

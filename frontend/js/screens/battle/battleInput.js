@@ -27,8 +27,15 @@ export function handleBattleKeyboardInput({
   getCurrentActor,
   toggleSpecialPage,
   playUIMoveBlip,
-  msgBox
+  msgBox,
+
+  // ✅ NEW
+  onKeyboardNavigate
 }) {
+  const nav = () => {
+    if (typeof onKeyboardNavigate === "function") onKeyboardNavigate();
+  };
+
   // CONFIRM MODE
   if (state.uiMode === "confirm") {
     if (Input.pressed("Enter")) {
@@ -46,10 +53,12 @@ export function handleBattleKeyboardInput({
     if (Input.pressed("ArrowLeft")) {
       Input.consume("ArrowLeft");
       state.actionIndex = (state.actionIndex - 1 + actions.length) % actions.length;
+      nav(); // ✅ keyboard now owns selection
     }
     if (Input.pressed("ArrowRight")) {
       Input.consume("ArrowRight");
       state.actionIndex = (state.actionIndex + 1) % actions.length;
+      nav(); // ✅ keyboard now owns selection
     }
     if (Input.pressed("Enter")) {
       Input.consume("Enter");
@@ -68,15 +77,18 @@ export function handleBattleKeyboardInput({
         const changed = toggleItemPageInState();
         consumeSpace(Input);
         if (changed && typeof playUIMoveBlip === "function") playUIMoveBlip();
+        if (changed) nav(); // ✅ page toggle is navigation
       }
 
       if (Input.pressed("ArrowLeft")) {
         Input.consume("ArrowLeft");
         moveItemCursorWithinCurrentPage(-1);
+        nav(); // ✅ keyboard now owns selection
       }
       if (Input.pressed("ArrowRight")) {
         Input.consume("ArrowRight");
         moveItemCursorWithinCurrentPage(1);
+        nav(); // ✅ keyboard now owns selection
       }
       if (Input.pressed("Enter")) {
         Input.consume("Enter");
@@ -97,10 +109,12 @@ export function handleBattleKeyboardInput({
     if (Input.pressed("ArrowLeft")) {
       Input.consume("ArrowLeft");
       moveTargetCursor(-1);
+      nav(); // ✅ keyboard now owns selection
     }
     if (Input.pressed("ArrowRight")) {
       Input.consume("ArrowRight");
       moveTargetCursor(1);
+      nav(); // ✅ keyboard now owns selection
     }
     if (Input.pressed("Enter")) {
       Input.consume("Enter");
@@ -117,6 +131,7 @@ export function handleBattleKeyboardInput({
       const toggled = actor ? toggleSpecialPage(actor) : false;
       consumeSpace(Input);
       if (toggled && typeof playUIMoveBlip === "function") playUIMoveBlip();
+      if (toggled) nav(); // ✅ page toggle is navigation
     }
 
     if (state.specialsList.length > 0) {
@@ -124,10 +139,12 @@ export function handleBattleKeyboardInput({
         Input.consume("ArrowLeft");
         state.specialIndex =
           (state.specialIndex - 1 + state.specialsList.length) % state.specialsList.length;
+        nav(); // ✅ keyboard now owns selection
       }
       if (Input.pressed("ArrowRight")) {
         Input.consume("ArrowRight");
         state.specialIndex = (state.specialIndex + 1) % state.specialsList.length;
+        nav(); // ✅ keyboard now owns selection
       }
       if (Input.pressed("Enter")) {
         Input.consume("Enter");
@@ -144,10 +161,12 @@ export function handleBattleKeyboardInput({
     if (Input.pressed("ArrowLeft")) {
       Input.consume("ArrowLeft");
       moveTargetCursor(-1);
+      nav(); // ✅ keyboard now owns selection
     }
     if (Input.pressed("ArrowRight")) {
       Input.consume("ArrowRight");
       moveTargetCursor(1);
+      nav(); // ✅ keyboard now owns selection
     }
     if (Input.pressed("Enter")) {
       Input.consume("Enter");

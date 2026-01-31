@@ -59,10 +59,6 @@ const DEV_CODE_TIMEOUT_MS = 1200;
 let layeredReady = false;
 let layeredLoading = false;
 
-// ✅ Menu mute toggle (M)
-let menuMuted = false;
-const MUTE_KEYS = ["Mute", "M", "m", "KeyM"];
-
 // ✅ Options overlay instance
 let optionsOverlay = null;
 
@@ -218,10 +214,6 @@ function consumeAny(keys) {
 
 function applyMenuMixNow(fadeMs = 0) {
   try {
-    if (menuMuted) {
-      MenuLayers.setMix(SILENT_MIX, fadeMs);
-      return;
-    }
     MenuLayers.setMix(MENU_MIX, fadeMs);
   } catch {}
 }
@@ -300,8 +292,6 @@ function ensureOptionsOverlay() {
 }
 
 function hasGestureThisFrame(mouse) {
-  // ✅ Browsers allow audio start ONLY on keydown / pointerdown / pointerup.
-  // We treat mouse.pressed/clicked as gesture-valid.
   if (
     Input.pressed("Confirm") ||
     Input.pressed("Up") ||
@@ -310,8 +300,7 @@ function hasGestureThisFrame(mouse) {
     Input.pressed("Left") ||
     Input.pressed("Right") ||
     Input.pressed("7") ||
-    Input.pressed("1") ||
-    isAnyPressed(MUTE_KEYS)
+    Input.pressed("1")
   ) {
     return true;
   }
@@ -338,30 +327,40 @@ export const MenuScreen = {
 
     // Force menu mix immediately (even if not started yet)
     applyMenuMixNow(0);
+
+    // ✅ NEW: start layered menu music now that Boot has already unlocked audio.
+    // (Do not await; keep enter() sync. If it fails, update() gesture path can still recover.)
+    try {
+      if (!layeredReady && !layeredLoading) {
+        layeredLoading = true;
+        MenuLayers.ensureStarted()
+          .then(() => {
+            layeredReady = true;
+            applyMenuMixNow(0);
+          })
+          .catch(() => {})
+          .finally(() => {
+            layeredLoading = false;
+          });
+      }
+    } catch {}
   },
 
   update(mouse) {
     openOverlayIfAny();
 
-    if (consumeAny(MUTE_KEYS)) {
-      menuMuted = !menuMuted;
-      applyMenuMixNow(0);
-    }
-
     // HARD ENFORCE: menu mix always wins while on menu (prevents layer2 sticking)
     applyMenuMixNow(0);
 
-    // ✅ Boot layered stems only from gesture-valid input
+    // ✅ Boot layered stems only from gesture-valid input (kept as fallback / recovery)
     if (hasGestureThisFrame(mouse)) {
       bootLayeredFromGestureIfNeeded(); // fire-and-forget
     }
 
-    // Use a stable frame time for dev-code timeout
     if (updateDevCode(16.67)) return;
 
     // -------- UNLOCK OVERLAY --------
     if (uiMode === "unlock") {
-      // Allow left/right tap behavior here too:
       if (mouse?.clicked) {
         if (mouse.x < SCREEN.W / 2) {
           playUIBackBlip();
@@ -405,12 +404,10 @@ export const MenuScreen = {
       ensureOptionsOverlay();
       optionsOverlay.update(1 / 60, Input, mouse);
 
-      // Optional: allow tap-left = back/close, tap-right = confirm (no-op here)
       if (mouse?.clicked) {
         if (mouse.x < SCREEN.W / 2) {
           playUIBackBlip();
           optionsOverlay.close?.();
-          // onClose handler will restore uiMode/menu mix
         }
       }
 
@@ -421,7 +418,6 @@ export const MenuScreen = {
     hoverIndex = -1;
     let hoveringAny = false;
 
-    // Mouse takes over selection only when it actively moved/pressed this frame.
     const mouseActiveThisFrame = !!(mouse && (mouse.moved || mouse.pressed));
 
     if (mouseActiveThisFrame && typeof mouse.x === "number" && typeof mouse.y === "number") {
@@ -443,24 +439,18 @@ export const MenuScreen = {
       mouse.setCursor(hoveringAny ? "pointer" : "default");
     }
 
-    // Click directly on option
     if (mouse?.clicked && hoveringAny) {
       playUIConfirmBlip();
       runSelectedOption(index);
       return;
     }
 
-    // Tap anywhere rule (menu mode):
-    // - Left half = Back (menu has no back, so no-op)
-    // - Right half = Confirm (run current selection)
     if (mouse?.clicked && !hoveringAny) {
       if (mouse.x >= SCREEN.W / 2) {
         playUIConfirmBlip();
         runSelectedOption(index);
         return;
       }
-      // left half: no-op (or uncomment for feedback)
-      // playUIBackBlip();
       return;
     }
 
@@ -508,10 +498,6 @@ export const MenuScreen = {
       MENU_LAYOUT.footer.x,
       MENU_LAYOUT.footer.y
     );
-
-    ctx.fillStyle = "#555";
-    ctx.font = "9px monospace";
-    ctx.fillText(menuMuted ? "M: unmute" : "M: mute", MENU_LAYOUT.footer.x, MENU_LAYOUT.footer.y + 14);
 
     if (uiMode === "unlock") {
       const payload = overlayPayload || {};

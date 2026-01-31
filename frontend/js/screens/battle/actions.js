@@ -83,7 +83,9 @@ export function createBattleActions({ state, deps }) {
     resolveSpecialsForActorCurrentPage,
 
     QUIRKY_EXTRA_TURN_CHANCE = 0.08,
-    rng = Math.random
+    rng = Math.random,
+    
+    DEFEND_ENEMY_PHASES = 2
   } = deps;
 
   if (!Array.isArray(actions) || actions.length === 0) {
@@ -157,9 +159,15 @@ export function createBattleActions({ state, deps }) {
     if (!actor) return advanceToNextActor();
 
     actor.isDefending = true;
+
+    // ✅ NEW: defend lasts for N enemy phases
+    const n = Number.isFinite(DEFEND_ENEMY_PHASES) ? DEFEND_ENEMY_PHASES : 2;
+    actor.defendEnemyPhasesLeft = Math.max(1, Math.floor(n));
+
     const title = actor.movie.title.slice(0, 10);
     queueMessages([`${title} braces for impact!`], () => advanceToNextActor());
   }
+
 
   // -------------------------
   // Items

@@ -1,24 +1,16 @@
 // frontend/js/screens/select.js
 //
-// Native 400x300 Select (no legacy transforms).
-// All UI numbers come from SELECT_LAYOUT in layout.js.
+// Modularized Select:
+// - Option 1: domain logic -> select/selectLogic.js
+// - Option 2: persistence -> select/selectPersistence.js
+// - Option 3: geometry -> select/selectLayout.js
+// - Option 4: render helpers -> select/selectRenderHelpers.js
+// - Option 5: input dispatcher -> select/selectInputHandlers.js
 //
-// ✅ SPECIAL SLOT options:
-//   - BLANK (cannot start battle)
-//   - RANDOM (resolves to a random movie ONLY when starting)
-//   - 14x GENRE RANDOM slots (resolves to a random movie of that genre ONLY when starting)
-//
-// ✅ UI:
-// - TOP arrow button is in a BOX ABOVE the poster (NOT covering it).
-// - BOTTOM arrow button is in a BOX BELOW the nameplate.
-// - Arrow boxes are the SAME WIDTH as the poster.
-// - Posters are drawn WITHOUT cropping (no cover-crop).
-//
-// ✅ FIX (your request):
-// - The entire “slot” (poster, poster slot, buttons, nameplate, card outline) is resized so its WIDTH
-//   matches the *existing rendered poster width* you’re seeing.
-// - Poster rect height is computed from aspect so poster height matches perfectly.
-// - Removes the “gap bar” between poster and nameplate (no black strip under poster).
+// + Search (movies.js only) -> select/selectDefaultSearch.js
+//   - type-to-suggest dropdown
+//   - pick a suggestion -> enter “pick slot” mode
+//   - click a slot -> place movie, exit mode
 
 import { movies, getAvailableMovies } from "../data/movies.js";
 import { playerArchetypes } from "../data/playerArchetypes.js";
@@ -30,11 +22,8 @@ import { ensureStatsState, incRandomizeClicks } from "../systems/statsSystem.js"
 import { ensureUnlockState, isArchetypeUnlocked, evaluateUnlockRules } from "../systems/unlockSystem.js";
 import { playUIBackBlip, playUIConfirmBlip, playUIMoveBlip } from "../sfx/uiSfx.js";
 
-// ✅ Layered menu/nav music (Select wants layer1+layer2)
 import { MenuLayers, NAV_MIX } from "../systems/menuLayeredMusic.js";
 import { syncOptionsAudioNow } from "../systems/optionsAudioSync.js";
-
-// ✅ Ensure Select respects saved user music volume immediately (same as Menu/Battle)
 
 import { ImageCache } from "../core/ImageCache.js";
 import { movieMeta } from "../data/movieMeta.js";
@@ -42,82 +31,177 @@ import { movieMeta } from "../data/movieMeta.js";
 import { renderUnlockArcOverlay } from "./unlockArcOverlay.js";
 import { peekUnlockEvents, popNextUnlockEvent } from "../systems/unlockTriggers.js";
 
+// Search (new)
+import {
+  ensureSearchState,
+  bindSearchKeyboard,
+  updateSearchFromQueue,
+  handleSearchPointer,
+  handleSearchHover,
+  isMouseOverSearchDropdown,
+  closeSearchDropdown,
+  renderSearchDropdown,
+  enterPickSlotMode,
+  exitPickSlotMode
+} from "./select/selectDefaultSearch.js";
+
+import {
+  ensureSelectTextInput,
+  syncSelectTextInput,
+  focusSelectTextInput,
+  blurSelectTextInput
+} from "./select/selectTextInputBridge.js";
+
+// Option 3 (layout)
+import {
+  getSelectAccessors,
+  slotCardRect,
+  topArrowRect,
+  posterRect,
+  nameplateRect,
+  bottomArrowRect,
+  slotBounds,
+  pointInRect,
+  searchRects,
+  homeCornerRect,
+  battleCornerRect,
+  archetypeBarRects,
+  confirmBoxRect
+} from "./select/selectLayout.js";
+
+// Option 1 (logic)
+import {
+  SLOT_TOKEN_BLANK,
+  SLOT_TOKEN_RANDOM,
+  GENRE_TOKEN_TO_DEF,
+  clampIndex,
+  normalizeSlotsToBaseLength,
+  hasBlankSlot,
+  cycleSlotWithOptionalFilter,
+  randomizeSlots,
+  randomizeSlotsCommonGenre,
+  resolvePartyFromSlots,
+  isSpecialSlotValue,
+  specialSlotLabel
+} from "./select/selectLogic.js";
+
+// Option 2 (persistence)
+import {
+  setLastScreen,
+  applyBootForceDefaultsIfNeeded,
+  persistSelectStateByBase,
+  restoreFromPersistIfPossible
+} from "./select/selectPersistence.js";
+
+// Option 4 (render helpers)
+import {
+  wrapText,
+  fitTextByShrinking,
+  getNameplateTitle,
+  getLocalPosterPath,
+  drawSpecialPoster
+} from "./select/selectRenderHelpers.js";
+
+// Option 5 (input)
+import {
+  detectKeyboardInput,
+  shouldResetStreakThisFrame,
+  handleUnlockOverlayMode,
+  handleConfirmPending,
+  handleGlobalHotkeys,
+  handleToggleFocus,
+  handleRandomizeActions,
+  handleConfirmPressed,
+  handleKeyboardNavigation,
+  handlePointerInput,
+  handlePointerHover
+} from "./select/selectInputHandlers.js";
+
 const SLOT_COUNT = 4;
 const DEFAULT_START_IDS = ["shawshank", "godfather", "taxi_driver", "pulp_fiction"];
-
-const LS_LAST_SCREEN = "rpg_last_screen";
-const LS_SELECT_SLOT_IDS = "rpg_select_slot_ids_v1";
-const LS_SELECT_UI = "rpg_select_ui_v1";
 
 // Ratatouille trial constants
 const RATATOUILLE_ARCHETYPE_ID = "ratatouille_only";
 const LS_RATA_TRIAL = "rpg_ratatouille_trial_v1";
 
-// -----------------------
-// ✅ SPECIAL SLOTS
-// -----------------------
-const SLOT_TOKEN_BLANK = "__SLOT_BLANK__";
-const SLOT_TOKEN_RANDOM = "__SLOT_RANDOM__";
-
-const GENRE_RANDOM_SLOTS = [
-  { token: "__SLOT_RAND_ACTION__", genre: "ACTION", label: "RANDOM: ACTION" },
-  { token: "__SLOT_RAND_ADVENTURE__", genre: "ADVENTURE", label: "RANDOM: ADVENTURE" },
-  { token: "__SLOT_RAND_DRAMA__", genre: "DRAMA", label: "RANDOM: DRAMA" },
-  { token: "__SLOT_RAND_COMEDY__", genre: "COMEDY", label: "RANDOM: COMEDY" },
-  { token: "__SLOT_RAND_HORROR__", genre: "HORROR", label: "RANDOM: HORROR" },
-  { token: "__SLOT_RAND_THRILLER__", genre: "THRILLER", label: "RANDOM: THRILLER" },
-  { token: "__SLOT_RAND_MYSTERY__", genre: "MYSTERY", label: "RANDOM: MYSTERY" },
-  { token: "__SLOT_RAND_SCIFI__", genre: "SCIFI", label: "RANDOM: SCIFI" },
-  { token: "__SLOT_RAND_FANTASY__", genre: "FANTASY", label: "RANDOM: FANTASY" },
-  { token: "__SLOT_RAND_ANIMATION__", genre: "ANIMATION", label: "RANDOM: ANIMATION" },
-  { token: "__SLOT_RAND_CRIME__", genre: "CRIME", label: "RANDOM: CRIME" },
-  { token: "__SLOT_RAND_ROMANCE__", genre: "ROMANCE", label: "RANDOM: ROMANCE" },
-  { token: "__SLOT_RAND_MUSICAL__", genre: "MUSICAL", label: "RANDOM: MUSICAL" }
-];
-
-const GENRE_TOKEN_TO_DEF = new Map(GENRE_RANDOM_SLOTS.map((g) => [g.token, g]));
+// Apply boot-time defaults rule exactly once on module load
+applyBootForceDefaultsIfNeeded();
 
 // -----------------------
-// localStorage safe utils
+// runtime state
 // -----------------------
-function safeGetLS(key) {
+const state = {
+  SLOT_COUNT,
+  movieMeta,
+
+  slots: null, // number (base index) OR token string
+  activeSlot: 0,
+  inputMode: "keyboard",
+  focus: "movies",
+
+  archetypeIndex: 0,
+  archetypeConfirmed: false,
+  confirmedArchetypeIndex: 0,
+  hoverCorner: null,
+
+  // legacy filter text (kept, but search system will also use it)
+  searchQuery: "",
+
+  confirmPending: false,
+  enterArmed: false,
+
+  uiMode: "select",
+  overlayPayload: null
+
+  // Search module will attach its own sub-state via ensureSearchState(state)
+};
+
+// -----------------------
+// Layered music boot state
+// -----------------------
+let layeredReady = false;
+let layeredLoading = false;
+
+async function bootNavLayersFromGestureIfNeeded() {
+  if (layeredReady) return true;
+  if (layeredLoading) return false;
+
+  layeredLoading = true;
   try {
-    return window?.localStorage?.getItem(key);
+    await MenuLayers.ensureStarted();
+    layeredReady = true;
+
+    try {
+      syncOptionsAudioNow();
+    } catch {}
+
+    MenuLayers.setMix(NAV_MIX, 140);
+    return true;
   } catch {
-    return null;
+    return false;
+  } finally {
+    layeredLoading = false;
   }
 }
-function safeSetLS(key, value) {
-  try {
-    window?.localStorage?.setItem(key, value);
-  } catch {}
-}
-function safeRemoveLS(key) {
-  try {
-    window?.localStorage?.removeItem(key);
-  } catch {}
-}
 
-function setLastScreen(name) {
-  safeSetLS(LS_LAST_SCREEN, String(name || ""));
-}
-
+// -----------------------
+// Ratatouille trial state
+// -----------------------
 function safeGetJSON(key) {
-  const raw = safeGetLS(key);
-  if (!raw) return null;
   try {
+    const raw = window?.localStorage?.getItem(key);
+    if (!raw) return null;
     return JSON.parse(raw);
   } catch {
     return null;
   }
 }
 function safeSetJSON(key, obj) {
-  safeSetLS(key, JSON.stringify(obj));
+  try {
+    window?.localStorage?.setItem(key, JSON.stringify(obj));
+  } catch {}
 }
 
-// -----------------------
-// Ratatouille trial state
-// -----------------------
 function getRatatouilleTrialState() {
   const st = safeGetJSON(LS_RATA_TRIAL);
   if (st && typeof st === "object") {
@@ -143,495 +227,15 @@ function mirrorRatatouilleTrialToGameState() {
   if (!GameState.flags.secrets.ratatouilleTrial) GameState.flags.secrets.ratatouilleTrial = st;
 }
 
-// -----------------------
-// Boot-time defaults rule
-// -----------------------
-const BOOT_LAST_SCREEN = String(safeGetLS(LS_LAST_SCREEN) || "");
-const BOOT_FORCE_DEFAULTS = BOOT_LAST_SCREEN === "select" || BOOT_LAST_SCREEN === "menu";
-if (BOOT_FORCE_DEFAULTS) {
-  safeRemoveLS(LS_SELECT_SLOT_IDS);
-  safeRemoveLS(LS_SELECT_UI);
+// Consecutive-R logic
+function ensureRataStreak() {
+  if (!GameState.flags) GameState.flags = {};
+  if (!GameState.flags.secrets) GameState.flags.secrets = {};
+  if (typeof GameState.flags.secrets.rataStreak !== "number") GameState.flags.secrets.rataStreak = 0;
 }
-
-// -----------------------
-// runtime state
-// -----------------------
-let slots = null; // number (movie base index) OR special token string
-let activeSlot = 0;
-let inputMode = "keyboard";
-let focus = "movies";
-
-let archetypeIndex = 0;
-let archetypeConfirmed = false;
-let confirmedArchetypeIndex = 0;
-
-let searchQuery = "";
-let confirmPending = false;
-
-// unlock overlay state (Select can show overlays EXCEPT Ratatouille)
-let uiMode = "select"; // "select" | "unlock"
-let overlayPayload = null;
-
-// -----------------------
-// ✅ Layered music state (autoplay-safe boot)
-// -----------------------
-let layeredReady = false;
-let layeredLoading = false;
-
-async function bootNavLayersFromGestureIfNeeded() {
-  if (layeredReady) return true;
-  if (layeredLoading) return false;
-
-  layeredLoading = true;
-  try {
-    // ensureStarted() resumes AudioContext and starts stems — MUST be gesture-driven.
-    await MenuLayers.ensureStarted();
-    layeredReady = true;
-
-    // ✅ Apply saved music volume as soon as audio is actually started
-    try { syncOptionsAudioNow(); } catch {}
-
-    // After start, ensure Select/Nav mix (layer1 + layer2)
-    MenuLayers.setMix(NAV_MIX, 140);
-    return true;
-  } catch {
-    return false;
-  } finally {
-    layeredLoading = false;
-  }
-}
-
-// -----------------------
-// derived layout values
-// -----------------------
-const W = SCREEN.W;
-const H = SCREEN.H;
-
-function C() {
-  return L?.colors || {};
-}
-function S() {
-  return L?.slots || {};
-}
-function bottom() {
-  return L?.bottom || {};
-}
-
-// -----------------------
-// geometry (FIXED STACK)
-// -----------------------
-
-// Poster aspect is WIDTH/HEIGHT (2/3 = portrait)
-function posterAspect() {
-  const a = Number(S()?.poster?.aspect ?? (2 / 3));
-  return a > 0 ? a : 2 / 3;
-}
-
-// posterHeight = width / (width/height)
-function posterHForW(w) {
-  return Math.floor(w / posterAspect());
-}
-
-/**
- * ✅ IMPORTANT:
- * You asked: “adjust all the slots width (poster + slot + buttons + nameplate) to match
- * the existing movie poster width.”
- *
- * In your current setup the “visible poster width” is smaller than S().w because
- * posterRect used padX/inset.
- *
- * So we compute the *existing* visible poster width and use that as the new slot width.
- */
-function visualSlotW() {
-  const baseW = Number(S()?.w ?? 80);
-  const padX = Number(S()?.poster?.padX ?? 0);
-  const inset = Number(S()?.poster?.inset ?? 0);
-
-  // existing drawn poster width (what you SEE)
-  const w = Math.floor(baseW - 2 * (padX + inset));
-  return Math.max(24, w);
-}
-
-function slotX(i) {
-  const sw = visualSlotW();
-  const gap = Number(S()?.gap ?? 13);
-  const totalW = SLOT_COUNT * sw + (SLOT_COUNT - 1) * gap;
-  const startX = Math.floor((W - totalW) / 2);
-  return startX + i * (sw + gap);
-}
-
-// Full slot “card” is computed from its parts to avoid overlap.
-function slotCardRect(i) {
-  const x = slotX(i);
-  const y = Number(S()?.y ?? 96);
-  const w = visualSlotW();
-
-  const ah = Number(S()?.arrowHitH ?? 18);
-  const np = S()?.nameplate || {};
-  const nh = Number(np.h ?? 25);
-
-  const pH = posterHForW(w);
-
-  // ✅ remove the “bar” gap under posters
-  const gapNP = 0;
-
-  // [top arrow] + [poster] + gap + [nameplate] + [bottom arrow]
-  const h = ah + pH + gapNP + nh + ah;
-
-  return { x, y, w, h };
-}
-
-function topArrowRect(i) {
-  const r = slotCardRect(i);
-  const ah = Number(S()?.arrowHitH ?? 18);
-  return { x: r.x, y: r.y, w: r.w, h: ah };
-}
-
-/**
- * ✅ Poster rect is EXACTLY the same width as the slot (visualSlotW),
- * and height is EXACTLY the aspect-derived height.
- * No pad/inset, no crop, no bars.
- */
-function posterRect(i) {
-  const r = slotCardRect(i);
-  const ah = Number(S()?.arrowHitH ?? 18);
-
-  // How much smaller (px) on each side. Try 1 first.
-  const shrink = Number(S()?.poster?.shrink ?? 1);
-
-  const fullW = r.w;
-  const fullH = posterHForW(fullW);
-
-  return {
-    // keep same position, just move in slightly so it doesn't touch the stroke
-    x: r.x + shrink,
-    y: r.y + ah + shrink,
-    w: Math.max(2, fullW - shrink * 2),
-    h: Math.max(2, fullH - shrink * 2)
-  };
-}
-
-
-function nameplateRect(i) {
-  const r = slotCardRect(i);
-  const ah = Number(S()?.arrowHitH ?? 18);
-  const np = S()?.nameplate || {};
-  const nh = Number(np.h ?? 25);
-
-  const pH = posterHForW(r.w);
-  const gapNP = 0;
-
-  return { x: r.x, y: r.y + ah + pH + gapNP, w: r.w, h: nh };
-}
-
-function bottomArrowRect(i) {
-  const r = slotCardRect(i);
-  const npR = nameplateRect(i);
-  const ah = Number(S()?.arrowHitH ?? 18);
-  return { x: r.x, y: npR.y + npR.h, w: r.w, h: ah };
-}
-
-function slotBounds(i) {
-  return slotCardRect(i);
-}
-
-function pointInRect(px, py, r) {
-  return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
-}
-
-function clampIndex(i, len) {
-  if (len <= 0) return 0;
-  return ((i % len) + len) % len;
-}
-
-// -----------------------
-// helpers
-// -----------------------
-function resetConfirm() {
-  confirmPending = false;
-}
-
-function clearAllSlotsToBlank() {
-  slots = new Array(SLOT_COUNT).fill(SLOT_TOKEN_BLANK);
-
-  activeSlot = 0;
-  inputMode = "keyboard";
-  focus = "movies";
-
-  archetypeIndex = 0;
-  archetypeConfirmed = false;
-  confirmedArchetypeIndex = 0;
-
-  searchQuery = "";
-  resetConfirm();
-
-  uiMode = "select";
-  overlayPayload = null;
-
-  persistSelectStateByBase();
-}
-
-function closeOverlay() {
-  uiMode = "select";
-  overlayPayload = null;
-}
-
-function maybeOpenOverlayFromGlobalEvents() {
-  if (uiMode !== "select") return;
-
-  const events = peekUnlockEvents(GameState);
-  if (!events || !events.length) return;
-
-  const next = events.find(
-    (e) =>
-      e?.type === "ARCHETYPE_UNLOCKED" &&
-      e?.showOverlay &&
-      e?.archetypeId !== RATATOUILLE_ARCHETYPE_ID
-  );
-  if (!next) return;
-
-  overlayPayload = popNextUnlockEvent(GameState);
-  if (overlayPayload) {
-    uiMode = "unlock";
-    resetConfirm();
-    persistSelectStateByBase();
-  }
-}
-
-function getVisibleMoviesBase() {
-  ensureUnlockState(GameState);
-  const visible = getAvailableMovies(GameState.unlocks);
-  return Array.isArray(visible) && visible.length > 0 ? visible : movies;
-}
-
-function getDisplayMovies() {
-  const base = getVisibleMoviesBase();
-  const q = String(searchQuery || "").trim().toLowerCase();
-  if (!q) return { base, display: base, displayToBase: null };
-
-  const display = [];
-  const displayToBase = [];
-  for (let i = 0; i < base.length; i++) {
-    const t = String(base[i]?.title || "").toLowerCase();
-    if (t.includes(q)) {
-      display.push(base[i]);
-      displayToBase.push(i);
-    }
-  }
-
-  if (display.length === 0) return { base, display: base, displayToBase: null };
-  return { base, display, displayToBase };
-}
-
-// allow special token strings to remain as-is
-function normalizeSlotsToBaseLength(baseLen) {
-  if (!Array.isArray(slots) || slots.length !== SLOT_COUNT) return;
-  for (let i = 0; i < SLOT_COUNT; i++) {
-    const v = slots[i];
-    if (typeof v === "string") continue;
-    if (typeof v !== "number" || !Number.isFinite(v) || baseLen <= 0) slots[i] = 0;
-    else slots[i] = ((v % baseLen) + baseLen) % baseLen;
-  }
-}
-
-function getAllowedBaseIndices(baseLen, displayToBase) {
-  if (baseLen <= 0) return [];
-  if (Array.isArray(displayToBase) && displayToBase.length > 0) return displayToBase.slice();
-  const out = new Array(baseLen);
-  for (let i = 0; i < baseLen; i++) out[i] = i;
-  return out;
-}
-
-// cycling rules (same as your current)
-function cycleSlotWithOptionalFilter(slotIdx, dir, displayToBase, baseLen) {
-  if (baseLen <= 0) return;
-
-  const allowed = getAllowedBaseIndices(baseLen, displayToBase);
-  if (!allowed.length) return;
-
-  const cur = slots[slotIdx];
-
-  const isMovie = typeof cur === "number" && Number.isFinite(cur);
-  const isBlank = cur === SLOT_TOKEN_BLANK;
-  const isRandom = cur === SLOT_TOKEN_RANDOM;
-  const isGenre = typeof cur === "string" && GENRE_TOKEN_TO_DEF.has(cur);
-
-  const genreTokens = GENRE_RANDOM_SLOTS.map((g) => g.token);
-  const firstGenre = genreTokens[0];
-
-  if (isBlank) {
-    if (dir > 0) {
-      slots[slotIdx] = allowed[0];
-      return;
-    }
-    slots[slotIdx] = SLOT_TOKEN_RANDOM;
-    return;
-  }
-
-  if (isRandom) {
-    if (dir > 0) {
-      slots[slotIdx] = firstGenre || SLOT_TOKEN_BLANK;
-      return;
-    }
-    slots[slotIdx] = allowed[allowed.length - 1];
-    return;
-  }
-
-  if (isGenre) {
-    const gi = genreTokens.indexOf(cur);
-    if (gi < 0) {
-      slots[slotIdx] = SLOT_TOKEN_RANDOM;
-      return;
-    }
-
-    if (dir < 0) {
-      if (gi === 0) {
-        slots[slotIdx] = SLOT_TOKEN_RANDOM;
-        return;
-      }
-      slots[slotIdx] = genreTokens[gi - 1];
-      return;
-    }
-
-    if (gi === genreTokens.length - 1) {
-      slots[slotIdx] = SLOT_TOKEN_BLANK;
-      return;
-    }
-
-    slots[slotIdx] = genreTokens[gi + 1];
-    return;
-  }
-
-  let pos = allowed.indexOf(isMovie ? cur : allowed[0]);
-  if (pos < 0) pos = 0;
-
-  if (dir < 0 && pos === 0) {
-    slots[slotIdx] = SLOT_TOKEN_BLANK;
-    return;
-  }
-
-  if (dir > 0 && pos === allowed.length - 1) {
-    slots[slotIdx] = SLOT_TOKEN_RANDOM;
-    return;
-  }
-
-  pos = clampIndex(pos + dir, allowed.length);
-  slots[slotIdx] = allowed[pos];
-}
-
-function pickDistinct(arr, n) {
-  const a = arr.slice();
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    const tmp = a[i];
-    a[i] = a[j];
-    a[j] = tmp;
-  }
-  return a.slice(0, n);
-}
-
-function randomizeSlots(baseLen, displayToBase, playSfx = true) {
-  const allowed = getAllowedBaseIndices(baseLen, displayToBase);
-  if (allowed.length <= 0) return;
-
-  const picks = allowed.length >= SLOT_COUNT ? pickDistinct(allowed, SLOT_COUNT) : null;
-
-  const next = new Array(SLOT_COUNT);
-  for (let i = 0; i < SLOT_COUNT; i++) {
-    if (picks) next[i] = picks[i];
-    else next[i] = allowed[Math.floor(Math.random() * allowed.length)];
-  }
-
-  slots = next;
-  resetConfirm();
-  persistSelectStateByBase();
-  if (playSfx) playUIMoveBlip();
-}
-
-function normalizeGenreName(g) {
-  const s = String(g || "").trim();
-  return s ? s.toUpperCase() : "";
-}
-
-function getMetaEntryForMovieId(id) {
-  if (!id) return null;
-
-  if (movieMeta && typeof movieMeta === "object" && !Array.isArray(movieMeta)) {
-    if (movieMeta[id]) return movieMeta[id];
-  }
-
-  if (Array.isArray(movieMeta)) {
-    return movieMeta.find((m) => m?.id === id || m?.movieId === id) || null;
-  }
-
-  return null;
-}
-
-function getGenresForMovie(movie) {
-  const id = movie?.id ? String(movie.id) : "";
-  if (!id) return [];
-
-  const meta = getMetaEntryForMovieId(id);
-  if (!meta) return [];
-
-  const out = new Set();
-  const list = [];
-
-  if (Array.isArray(meta.genres)) list.push(...meta.genres);
-  if (meta.primaryGenre) list.push(meta.primaryGenre);
-  if (meta.secondaryGenre) list.push(meta.secondaryGenre);
-  if (meta.genre) list.push(meta.genre);
-
-  for (const g of list) {
-    const ng = normalizeGenreName(g);
-    if (ng) out.add(ng);
-  }
-
-  return Array.from(out);
-}
-
-function randomizeSlotsCommonGenre(baseVisible, displayToBase, playSfx = true) {
-  const baseLen = Array.isArray(baseVisible) ? baseVisible.length : 0;
-  const allowed = getAllowedBaseIndices(baseLen, displayToBase);
-  if (allowed.length <= 0) return false;
-
-  const genreToIndices = new Map();
-
-  for (const idx of allowed) {
-    const m = baseVisible[idx];
-    const genres = getGenresForMovie(m);
-    for (const g of genres) {
-      if (!genreToIndices.has(g)) genreToIndices.set(g, []);
-      genreToIndices.get(g).push(idx);
-    }
-  }
-
-  const candidates = [];
-  for (const [g, arr] of genreToIndices.entries()) {
-    const uniq = Array.from(new Set(arr));
-    if (uniq.length >= SLOT_COUNT) candidates.push({ genre: g, indices: uniq });
-  }
-
-  if (candidates.length === 0) return false;
-
-  const weighted = [];
-  for (const c of candidates) {
-    const w = Math.max(1, Math.min(6, Math.floor(c.indices.length / 4)));
-    for (let k = 0; k < w; k++) weighted.push(c);
-  }
-  const chosen = weighted[Math.floor(Math.random() * weighted.length)] || candidates[0];
-
-  const picked = pickDistinct(chosen.indices, SLOT_COUNT);
-  if (picked.length < SLOT_COUNT) return false;
-
-  slots = picked;
-  archetypeIndex = 0;
-  archetypeConfirmed = false;
-
-  resetConfirm();
-  persistSelectStateByBase();
-  if (playSfx) playUIMoveBlip();
-  return true;
+function resetRandomizeStreak() {
+  ensureRataStreak();
+  GameState.flags.secrets.rataStreak = 0;
 }
 
 function getMovieById(id) {
@@ -674,28 +278,11 @@ function startLevelIntroWithArchetype(archetypeId, opts = {}) {
   setLastScreen("levelIntro");
   playUIConfirmBlip();
 
-  // ✅ Leaving Select/Nav flow -> stop layered stems before run music
-  try { MenuLayers.stop({ fadeMs: 180 }); } catch {}
-
+  try {
+    MenuLayers.stop({ fadeMs: 180 });
+  } catch {}
   changeScreen("levelIntro");
   return true;
-}
-
-
-// -----------------------
-// Consecutive-R logic
-// -----------------------
-function ensureRataStreak() {
-  if (!GameState.flags) GameState.flags = {};
-  if (!GameState.flags.secrets) GameState.flags.secrets = {};
-  if (typeof GameState.flags.secrets.rataStreak !== "number") {
-    GameState.flags.secrets.rataStreak = 0;
-  }
-}
-
-function resetRandomizeStreak() {
-  ensureRataStreak();
-  GameState.flags.secrets.rataStreak = 0;
 }
 
 function onPressRandomizeMaybeStartTrial() {
@@ -732,8 +319,79 @@ function onPressRandomizeMaybeStartTrial() {
 }
 
 // -----------------------
-// archetypes list
+// screen-specific helpers
 // -----------------------
+const { C, S, bottom } = getSelectAccessors(L);
+
+function resetSelectUIState() {
+  state.confirmPending = false;
+  state.uiMode = "select";
+  state.overlayPayload = null;
+
+  // search state (if any) should return to neutral
+  try {
+    exitPickSlotMode(state);
+    closeSearchDropdown(state);
+  } catch {}
+}
+
+function closeOverlay() {
+  state.uiMode = "select";
+  state.overlayPayload = null;
+}
+
+function maybeOpenOverlayFromGlobalEvents() {
+  if (state.uiMode !== "select") return;
+
+  const events = peekUnlockEvents(GameState);
+  if (!events || !events.length) return;
+
+  const next = events.find(
+    (e) => e?.type === "ARCHETYPE_UNLOCKED" && e?.showOverlay && e?.archetypeId !== RATATOUILLE_ARCHETYPE_ID
+  );
+  if (!next) return;
+
+  state.overlayPayload = popNextUnlockEvent(GameState);
+  if (state.overlayPayload) {
+    state.uiMode = "unlock";
+    state.confirmPending = false;
+
+    try {
+      exitPickSlotMode(state);
+      closeSearchDropdown(state);
+    } catch {}
+
+    persist();
+  }
+}
+
+function getVisibleMoviesBase() {
+  ensureUnlockState(GameState);
+  const visible = getAvailableMovies(GameState.unlocks);
+  return Array.isArray(visible) && visible.length > 0 ? visible : movies;
+}
+
+// Kept for existing slot cycling + randomize behavior.
+// (Search system does its own suggestions list.)
+function getDisplayMovies() {
+  const base = getVisibleMoviesBase();
+  const q = String(state.searchQuery || "").trim().toLowerCase();
+  if (!q) return { base, display: base, displayToBase: null };
+
+  const display = [];
+  const displayToBase = [];
+  for (let i = 0; i < base.length; i++) {
+    const t = String(base[i]?.title || "").toLowerCase();
+    if (t.includes(q)) {
+      display.push(base[i]);
+      displayToBase.push(i);
+    }
+  }
+
+  if (display.length === 0) return { base, display: base, displayToBase: null };
+  return { base, display, displayToBase };
+}
+
 function getSelectableArchetypes() {
   ensureUnlockState(GameState);
 
@@ -752,9 +410,9 @@ function setArchetypeByIndex(nextIndex) {
   const baseVisible = getVisibleMoviesBase();
   const archetypes = getSelectableArchetypes();
 
-  archetypeIndex = clampIndex(nextIndex, archetypes.length);
+  state.archetypeIndex = clampIndex(nextIndex, archetypes.length);
 
-  const chosen = archetypes[archetypeIndex];
+  const chosen = archetypes[state.archetypeIndex];
   if (!chosen || chosen.id === "custom") return;
 
   const byId = new Map();
@@ -768,146 +426,24 @@ function setArchetypeByIndex(nextIndex) {
     filled[i] = id && byId.has(id) ? byId.get(id) : 0;
   }
 
-  slots = filled;
-  resetConfirm();
-  persistSelectStateByBase();
+  state.slots = filled;
+  state.confirmPending = false;
+
+  // choosing an archetype should exit search dropdown + pick-slot mode
+  try {
+    exitPickSlotMode(state);
+    closeSearchDropdown(state);
+  } catch {}
+
+  persist();
 }
 
-// -----------------------
-// special slot resolving
-// -----------------------
-function isSpecialSlotValue(v) {
-  return typeof v === "string";
-}
-
-function isBlankSlotValue(v) {
-  return v === SLOT_TOKEN_BLANK;
-}
-
-function hasBlankSlot() {
-  for (let i = 0; i < SLOT_COUNT; i++) {
-    if (isBlankSlotValue(slots?.[i])) return true;
-  }
+function isSpecialTokenValue(v) {
+  if (typeof v !== "string") return false;
+  if (v === SLOT_TOKEN_BLANK) return true;
+  if (v === SLOT_TOKEN_RANDOM) return true;
+  if (GENRE_TOKEN_TO_DEF.has(v)) return true;
   return false;
-}
-
-function indicesForGenre(baseVisible, genre) {
-  const g = normalizeGenreName(genre);
-  const out = [];
-  for (let i = 0; i < baseVisible.length; i++) {
-    const m = baseVisible[i];
-    const gs = getGenresForMovie(m);
-    if (gs.includes(g)) out.push(i);
-  }
-  return out;
-}
-
-function resolvePartyFromSlots(baseVisible) {
-  const baseLen = Array.isArray(baseVisible) ? baseVisible.length : 0;
-  if (baseLen <= 0) return new Array(SLOT_COUNT).fill(getMovieById("unknown"));
-
-  const used = new Set();
-  for (let i = 0; i < SLOT_COUNT; i++) {
-    const v = slots[i];
-    if (typeof v === "number" && v >= 0) used.add(v);
-  }
-
-  function pickFromPool(pool) {
-    if (!Array.isArray(pool) || pool.length === 0) return null;
-    const unused = pool.filter((x) => !used.has(x));
-    const src = unused.length ? unused : pool;
-    const idx = src[Math.floor(Math.random() * src.length)];
-    if (typeof idx === "number") used.add(idx);
-    return idx;
-  }
-
-  const party = new Array(SLOT_COUNT);
-
-  for (let i = 0; i < SLOT_COUNT; i++) {
-    const v = slots[i];
-
-    if (typeof v === "number" && v >= 0) {
-      party[i] = baseVisible[v] || baseVisible[0];
-      continue;
-    }
-
-    if (v === SLOT_TOKEN_RANDOM) {
-      const all = [];
-      for (let k = 0; k < baseLen; k++) all.push(k);
-      const pick = pickFromPool(all);
-      party[i] = baseVisible[pick ?? 0] || baseVisible[0];
-      continue;
-    }
-
-    const def = GENRE_TOKEN_TO_DEF.get(v);
-    if (def) {
-      const pool = indicesForGenre(baseVisible, def.genre);
-      const pick = pickFromPool(pool);
-
-      if (pick == null) {
-        const all = [];
-        for (let k = 0; k < baseLen; k++) all.push(k);
-        const anyPick = pickFromPool(all);
-        party[i] = baseVisible[anyPick ?? 0] || baseVisible[0];
-      } else {
-        party[i] = baseVisible[pick] || baseVisible[0];
-      }
-      continue;
-    }
-
-    party[i] = baseVisible[0];
-  }
-
-  return party;
-}
-
-function specialSlotLabel(v) {
-  if (v === SLOT_TOKEN_BLANK) return "BLANK";
-  if (v === SLOT_TOKEN_RANDOM) return "RANDOM";
-  const def = GENRE_TOKEN_TO_DEF.get(v);
-  if (def) return def.label || `RAND: ${def.genre}`;
-  return "SPECIAL";
-}
-
-// -----------------------
-// Persistence
-// -----------------------
-function getSlotIdsFromBase(baseVisible) {
-  const ids = [];
-  for (let i = 0; i < SLOT_COUNT; i++) {
-    const v = slots?.[i];
-    if (typeof v === "string") {
-      ids.push(v);
-      continue;
-    }
-    const movie = baseVisible?.[v ?? 0];
-    ids.push(movie?.id || null);
-  }
-  return ids;
-}
-
-function setSlotsFromIds(baseVisible, ids) {
-  const baseLen = Array.isArray(baseVisible) ? baseVisible.length : 0;
-  if (baseLen <= 0) {
-    slots = new Array(SLOT_COUNT).fill(0);
-    return;
-  }
-
-  const byId = new Map();
-  for (let i = 0; i < baseLen; i++) byId.set(baseVisible[i]?.id, i);
-
-  const out = new Array(SLOT_COUNT).fill(0);
-  for (let i = 0; i < SLOT_COUNT; i++) {
-    const id = ids?.[i];
-
-    if (id === SLOT_TOKEN_BLANK || id === SLOT_TOKEN_RANDOM || GENRE_TOKEN_TO_DEF.has(id)) {
-      out[i] = id;
-      continue;
-    }
-
-    out[i] = id && byId.has(id) ? byId.get(id) : 0;
-  }
-  slots = out;
 }
 
 function computeDefaultIds() {
@@ -915,128 +451,109 @@ function computeDefaultIds() {
 }
 
 function applyDefaults(baseVisible) {
-  setSlotsFromIds(baseVisible, computeDefaultIds());
+  // map ids -> base indices
+  const byId = new Map();
+  for (let i = 0; i < baseVisible.length; i++) byId.set(baseVisible[i]?.id, i);
 
-  activeSlot = 0;
-  inputMode = "keyboard";
-  focus = "movies";
+  const ids = computeDefaultIds();
+  state.slots = new Array(SLOT_COUNT).fill(0).map((_, i) => (byId.has(ids[i]) ? byId.get(ids[i]) : 0));
 
-  archetypeIndex = 0;
-  archetypeConfirmed = false;
-  confirmedArchetypeIndex = 0;
+  state.activeSlot = 0;
+  state.inputMode = "keyboard";
+  state.focus = "movies";
 
-  searchQuery = "";
-  resetConfirm();
+  state.archetypeIndex = 0;
+  state.archetypeConfirmed = false;
+  state.confirmedArchetypeIndex = 0;
 
-  uiMode = "select";
-  overlayPayload = null;
+  state.searchQuery = "";
+  state.confirmPending = false;
+
+  state.uiMode = "select";
+  state.overlayPayload = null;
+
+  try {
+    exitPickSlotMode(state);
+    closeSearchDropdown(state);
+  } catch {}
 
   resetRandomizeStreak();
-  persistSelectStateByBase();
+  persist();
 }
 
-function readPersistedSlotIds() {
-  const raw = safeGetLS(LS_SELECT_SLOT_IDS);
-  if (!raw) return null;
-  try {
-    const arr = JSON.parse(raw);
-    if (!Array.isArray(arr)) return null;
-    return arr.slice(0, SLOT_COUNT);
-  } catch {
-    return null;
-  }
-}
-
-function readPersistedUI() {
-  const raw = safeGetLS(LS_SELECT_UI);
-  if (!raw) return null;
-  try {
-    const obj = JSON.parse(raw);
-    return obj && typeof obj === "object" ? obj : null;
-  } catch {
-    return null;
-  }
-}
-
-function persistSelectStateByBase() {
+function persist() {
   const baseVisible = getVisibleMoviesBase();
-  const ids = getSlotIdsFromBase(baseVisible);
-  safeSetLS(LS_SELECT_SLOT_IDS, JSON.stringify(ids));
-
-  const ui = {
-    activeSlot,
-    focus,
-    archetypeIndex,
-    archetypeConfirmed,
-    confirmedArchetypeIndex,
-    searchQuery,
-    confirmPending
-  };
-  safeSetLS(LS_SELECT_UI, JSON.stringify(ui));
+  persistSelectStateByBase({ SLOT_COUNT, state, baseVisible });
 }
 
-function restoreFromPersistIfPossible(baseVisible) {
-  const ids = readPersistedSlotIds();
-  if (!ids) return false;
-
-  setSlotsFromIds(baseVisible, ids);
-
-  const ui = readPersistedUI();
-  if (ui) {
-    activeSlot =
-      typeof ui.activeSlot === "number" && Number.isFinite(ui.activeSlot)
-        ? clampIndex(ui.activeSlot, SLOT_COUNT)
-        : 0;
-
-    focus = ui.focus === "archetypes" || ui.focus === "search" ? ui.focus : "movies";
-
-    archetypeIndex = typeof ui.archetypeIndex === "number" ? ui.archetypeIndex : 0;
-    archetypeConfirmed = !!ui.archetypeConfirmed;
-    confirmedArchetypeIndex =
-      typeof ui.confirmedArchetypeIndex === "number" ? ui.confirmedArchetypeIndex : 0;
-
-    searchQuery = typeof ui.searchQuery === "string" ? ui.searchQuery : "";
-    confirmPending = !!ui.confirmPending;
-  }
-
-  inputMode = "keyboard";
-  uiMode = "select";
-  overlayPayload = null;
-
-  resetRandomizeStreak();
-  return true;
-}
-
-function ensureInitialized() {
+function restoreOrDefault() {
   const baseVisible = getVisibleMoviesBase();
   ensureStatsState(GameState);
   mirrorRatatouilleTrialToGameState();
   ensureRataStreak();
 
-  if (Array.isArray(slots) && slots.length === SLOT_COUNT) {
-    normalizeSlotsToBaseLength(baseVisible.length);
+  // ensure search sub-state exists before anyone tries to use it
+  try {
+    ensureSearchState(state);
+  } catch {}
 
+  if (Array.isArray(state.slots) && state.slots.length === SLOT_COUNT) {
+    normalizeSlotsToBaseLength(state.slots, SLOT_COUNT, baseVisible.length);
     const archetypes = getSelectableArchetypes();
-    archetypeIndex = clampIndex(archetypeIndex, archetypes.length);
-    confirmedArchetypeIndex = clampIndex(confirmedArchetypeIndex, archetypes.length);
+    state.archetypeIndex = clampIndex(state.archetypeIndex, archetypes.length);
+    state.confirmedArchetypeIndex = clampIndex(state.confirmedArchetypeIndex, archetypes.length);
     return;
   }
 
-  if (BOOT_FORCE_DEFAULTS) applyDefaults(baseVisible);
-  else {
-    const restored = restoreFromPersistIfPossible(baseVisible);
-    if (!restored) applyDefaults(baseVisible);
-  }
+  const ok = restoreFromPersistIfPossible({
+    SLOT_COUNT,
+    state,
+    baseVisible,
+    clampIndex,
+    isSpecialTokenFn: isSpecialTokenValue
+  });
+
+  if (!ok) applyDefaults(baseVisible);
 
   const archetypes = getSelectableArchetypes();
-  archetypeIndex = clampIndex(archetypeIndex, archetypes.length);
-  confirmedArchetypeIndex = clampIndex(confirmedArchetypeIndex, archetypes.length);
+  state.archetypeIndex = clampIndex(state.archetypeIndex, archetypes.length);
+  state.confirmedArchetypeIndex = clampIndex(state.confirmedArchetypeIndex, archetypes.length);
+}
+
+function clearAllSlotsToBlank() {
+  state.slots = new Array(SLOT_COUNT).fill(SLOT_TOKEN_BLANK);
+
+  state.activeSlot = 0;
+  state.inputMode = "keyboard";
+  state.focus = "movies";
+
+  state.archetypeIndex = 0;
+  state.archetypeConfirmed = false;
+  state.confirmedArchetypeIndex = 0;
+
+  state.searchQuery = "";
+  state.confirmPending = false;
+
+  state.uiMode = "select";
+  state.overlayPayload = null;
+
+  try {
+    exitPickSlotMode(state);
+    closeSearchDropdown(state);
+  } catch {}
+
+  persist();
 }
 
 function goHome() {
   resetRandomizeStreak();
 
-  persistSelectStateByBase();
+  try {
+    exitPickSlotMode(state);
+    closeSearchDropdown(state);
+  } catch {}
+
+  persist();
   setLastScreen("menu");
 
   playUIBackBlip();
@@ -1046,16 +563,24 @@ function goHome() {
 function confirmPicks(baseVisible) {
   resetRandomizeStreak();
 
-  if (hasBlankSlot()) {
+  if (hasBlankSlot(state.slots, SLOT_COUNT)) {
     playUIBackBlip();
-    confirmPending = false;
-    persistSelectStateByBase();
+    state.confirmPending = false;
+    persist();
     return;
   }
 
-  GameState.party.movies = resolvePartyFromSlots(baseVisible);
+  const fallback = getMovieById("unknown");
 
-  persistSelectStateByBase();
+  GameState.party.movies = resolvePartyFromSlots({
+    SLOT_COUNT,
+    movieMeta,
+    slots: state.slots,
+    baseVisible,
+    fallbackMovie: fallback
+  });
+
+  persist();
   setLastScreen("levelIntro");
 
   GameState.currentLevel = 1;
@@ -1071,197 +596,10 @@ function confirmPicks(baseVisible) {
 
   playUIConfirmBlip();
 
-  // ✅ Leaving Select/Nav flow -> stop layered stems before run music
-  try { MenuLayers.stop({ fadeMs: 180 }); } catch {}
-
-  changeScreen("levelIntro");
-}
-
-// -----------------------
-// UI rect helpers
-// -----------------------
-function searchRects() {
-  const sh = Number(L?.search?.h ?? 20);
-  const sw = Number(L?.search?.w ?? 213);
-  const btn = Number(L?.search?.btn ?? 20);
-  const gap = Number(L?.search?.gap ?? 8);
-  const y = Number(L?.search?.y ?? 56);
-
-  const x = Math.floor((W - sw) / 2);
-
-  return {
-    left: { x: x - btn - gap, y, w: btn, h: sh },
-    mid: { x, y, w: sw, h: sh },
-    right: { x: x + sw + gap, y, w: btn, h: sh }
-  };
-}
-
-function homeCornerRect() {
-  const y = Number(bottom()?.y ?? 272);
-  const btn = Number(bottom()?.cornerBtn ?? 23);
-  const x = Number(bottom()?.homeX ?? 10);
-  return { x, y, w: btn, h: btn };
-}
-
-function battleCornerRect() {
-  const y = Number(bottom()?.y ?? 272);
-  const btn = Number(bottom()?.cornerBtn ?? 23);
-  const homeX = Number(bottom()?.homeX ?? 10);
-  const x = W - homeX - btn;
-  return { x, y, w: btn, h: btn };
-}
-
-function archetypeBarRects() {
-  const by = Number(bottom()?.archetype?.y ?? 272);
-  const bh = Number(bottom()?.archetype?.h ?? 23);
-  const arrowW = Number(bottom()?.archetype?.arrowW ?? 23);
-  const sidePad = Number(bottom()?.archetype?.sidePad ?? 13);
-  const centerPad = Number(bottom()?.archetype?.centerPad ?? 8);
-
-  const home = homeCornerRect();
-  const barX = home.x + home.w + sidePad;
-  const barW = W - barX * 2;
-
-  const left = { x: barX, y: by, w: arrowW, h: bh };
-  const right = { x: barX + barW - arrowW, y: by, w: arrowW, h: bh };
-  const center = { x: barX + arrowW + centerPad, y: by, w: barW - (arrowW + centerPad) * 2, h: bh };
-
-  return { bar: { x: barX, y: by, w: barW, h: bh }, left, right, center };
-}
-
-function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
-  const words = String(text || "").trim().split(/\s+/);
-  let line = "";
-  let lineCount = 0;
-
-  for (let n = 0; n < words.length; n++) {
-    const testLine = line ? line + " " + words[n] : words[n];
-    const w = ctx.measureText(testLine).width;
-
-    if (w > maxWidth && line) {
-      ctx.fillText(line, x, y + lineCount * lineHeight);
-      line = words[n];
-      lineCount++;
-      if (lineCount >= 2) return;
-    } else {
-      line = testLine;
-    }
-  }
-
-  if (line) ctx.fillText(line, x, y + lineCount * lineHeight);
-}
-
-function fitTextByShrinking(ctx, text, maxWidth, startPx = 11, minPx = 8) {
-  const s = String(text || "");
-  for (let px = startPx; px >= minPx; px--) {
-    ctx.font = `${px}px monospace`;
-    if (ctx.measureText(s).width <= maxWidth) return { text: s, px };
-  }
-
-  ctx.font = `${minPx}px monospace`;
-  const ell = "…";
-  if (ctx.measureText(s).width <= maxWidth) return { text: s, px: minPx };
-
-  let lo = 0;
-  let hi = s.length;
-  while (lo < hi) {
-    const mid = Math.floor((lo + hi) / 2);
-    const candidate = s.slice(0, mid) + ell;
-    if (ctx.measureText(candidate).width <= maxWidth) lo = mid + 1;
-    else hi = mid;
-  }
-  const cut = Math.max(0, lo - 1);
-  return { text: s.slice(0, cut) + ell, px: minPx };
-}
-
-function getNameplateTitle(movie) {
-  if (!movie) return "Unknown";
-  const s = String(movie.shortTitle || "").trim();
-  if (s) return s;
-  return String(movie.title || "Unknown");
-}
-
-function getLocalPosterPath(movie) {
-  const id = movie?.id ? String(movie.id) : "";
-  if (!id) return null;
-  return `frontend/assets/posters/${id}.jpg`;
-}
-
-function detectKeyboardInput(mouse) {
-  if (
-    Input.pressed("Left") ||
-    Input.pressed("Right") ||
-    Input.pressed("Up") ||
-    Input.pressed("Down") ||
-    Input.pressed("Confirm") ||
-    Input.pressed("Back") ||
-    Input.pressed("Toggle") ||
-    Input.pressed("Randomize") ||
-    Input.pressed("GenreRandomize") ||
-    Input.pressed("Clear")
-  ) {
-    return "keyboard";
-  }
-  // ✅ A click/tap can happen without any pointermove first (mobile/trackpad).
-  // Treat pressed/clicked/tapped as mouse input so hitboxes always work.
-  if (mouse?.moved || mouse?.pressed || mouse?.clicked || mouse?.tapped) return "mouse";
-  return inputMode;
-}
-
-function confirmBoxRect() {
-  const helpY = Number(L?.help?.y ?? 40);
-  const r = L?.confirm?.box || {};
-  return { x: Number(r.x ?? 40), y: helpY + 6, w: Number(r.w ?? 320), h: Number(r.h ?? 18) };
-}
-
-function shouldResetStreakThisFrame(mouse, inConfirmPending) {
-  if (inConfirmPending) return true;
-  if (Input.pressed("GenreRandomize")) return true;
-  if (Input.pressed("Toggle")) return true;
-  if (Input.pressed("Confirm")) return true;
-  if (Input.pressed("Back")) return true;
-  if (Input.pressed("Clear")) return true;
-  if (Input.pressed("Left") || Input.pressed("Right") || Input.pressed("Up") || Input.pressed("Down")) return true;
-  if (mouse?.clicked) return true;
-  return false;
-}
-
-// Special poster art
-function drawSpecialPoster(ctx, pr, v) {
-  ctx.save();
   try {
-    if (v === SLOT_TOKEN_BLANK) return;
-
-    const isRandom = v === SLOT_TOKEN_RANDOM;
-    const def = GENRE_TOKEN_TO_DEF.get(v);
-
-    const qx = pr.x + Math.floor(pr.w / 2);
-    const qy = pr.y + Math.floor(pr.h * 0.42);
-
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillStyle = C().textDim || "#aaa";
-    ctx.font = "46px monospace";
-    ctx.fillText("?", qx, qy);
-
-    ctx.textBaseline = "alphabetic";
-    ctx.fillStyle = C().posterLoading || "#666";
-
-    if (isRandom) {
-      ctx.font = "12px monospace";
-      ctx.fillText("Random", qx, qy + 28);
-      return;
-    }
-
-    if (def) {
-      ctx.font = "11px monospace";
-      ctx.fillText("Random:", qx, qy + 24);
-      ctx.fillText(String(def.genre || "").toUpperCase(), qx, qy + 38);
-      return;
-    }
-  } finally {
-    ctx.restore();
-  }
+    MenuLayers.stop({ fadeMs: 180 });
+  } catch {}
+  changeScreen("levelIntro");
 }
 
 // -----------------------
@@ -1269,19 +607,28 @@ function drawSpecialPoster(ctx, pr, v) {
 // -----------------------
 export const SelectScreen = {
   enter() {
-    // ✅ Apply saved volumes immediately when entering Select.
-    // (Safe even before audio is started; if buses don't exist yet, sync is a no-op.)
-    try { syncOptionsAudioNow(); } catch {}
-    
+    try {
+      resetSelectUIState();
+    } catch {}
+    state.enterArmed = false;
 
-    // ✅ Select wants NAV mix (layer1 + layer2).
-    // Do NOT start/resume here (autoplay-safe). Just set the desired mix.
-    try { MenuLayers.setMix(NAV_MIX, 0); } catch {}
+    ensureSelectTextInput();
+
+    try {
+      ensureSearchState(state);
+      bindSearchKeyboard(Input, state);
+    } catch {}
+
+    try {
+      syncOptionsAudioNow();
+    } catch {}
+    try {
+      MenuLayers.setMix(NAV_MIX, 0);
+    } catch {}
   },
 
-
   update(mouse) {
-    // ✅ Gesture-gated boot: if any meaningful input happened this frame, try starting stems.
+    // Gesture-gated boot for audio
     if (
       Input.pressed("Confirm") ||
       Input.pressed("Left") ||
@@ -1292,418 +639,413 @@ export const SelectScreen = {
       Input.pressed("Toggle") ||
       Input.pressed("Randomize") ||
       Input.pressed("GenreRandomize") ||
-      Input.pressed("Clear")
+      Input.pressed("Clear") ||
+      mouse?.pressed ||
+      mouse?.clicked ||
+      mouse?.tapped
     ) {
-      // fire-and-forget; don't block input
       bootNavLayersFromGestureIfNeeded();
     }
 
-    // Also keep forcing NAV mix while we're on Select (safe even if not started yet)
     try {
       MenuLayers.setMix(NAV_MIX, 0);
     } catch {}
-
-    // ✅ Keep master bus synced to saved Options level
-    try { syncOptionsAudioNow(); } catch {}
+    try {
+      syncOptionsAudioNow();
+    } catch {}
 
     maybeOpenOverlayFromGlobalEvents();
+    restoreOrDefault();
 
-    if (uiMode === "unlock") {
-      if (Input.pressed("Clear")) {
-        Input.consume("Clear");
-        closeOverlay();
-        ensureInitialized();
-        clearAllSlotsToBlank();
-        playUIConfirmBlip();
-        return;
-      }
-
-      if (Input.pressed("Back")) {
-        Input.consume("Back");
-        playUIBackBlip();
-        closeOverlay();
-        return;
-      }
-
-      if (Input.pressed("Confirm")) {
-        Input.consume("Confirm");
-        playUIConfirmBlip();
-        closeOverlay();
-        return;
-      }
-
-      return;
-    }
-
-    setLastScreen("select");
-    ensureInitialized();
+    // Arm confirm only after Confirm is released once
+    if (!Input.isDown("Confirm")) state.enterArmed = true;
 
     const { base: baseVisible, displayToBase } = getDisplayMovies();
     const archetypes = getSelectableArchetypes();
 
-    inputMode = detectKeyboardInput(mouse);
+    syncSelectTextInput({
+      state,
+      SCREEN,
+      L,
+      searchRects
+    });
 
-    if (!Input.pressed("Randomize") && shouldResetStreakThisFrame(mouse, confirmPending)) {
+    // ensure search exists and consume any queued typing into it
+    try {
+      ensureSearchState(state);
+      updateSearchFromQueue(state, baseVisible, { SCREEN, L });
+    } catch {}
+
+    state.inputMode = detectKeyboardInput(Input, mouse, state.inputMode);
+
+    // -----------------------
+    // Search "locks" Back/Confirm/Toggle while active (prevents global behavior)
+    // -----------------------
+    ensureSearchState(state);
+    const searchActive =
+      state.focus === "search" ||
+      (state.search?.suggestions && state.search.suggestions.length > 0) ||
+      !!state.search?.pickSlotMode;
+
+    if (searchActive) {
+      if (Input.pressed("Back")) Input.consume("Back");
+      if (Input.pressed("Confirm")) Input.consume("Confirm");
+      if (Input.pressed("Toggle")) Input.consume("Toggle");
+    }
+
+    if (!Input.pressed("Randomize") && shouldResetStreakThisFrame(Input, mouse, state.confirmPending)) {
       resetRandomizeStreak();
     }
 
-    if (Input.pressed("Clear")) {
-      Input.consume("Clear");
-      clearAllSlotsToBlank();
-      playUIConfirmBlip();
+    // 1) Overlay mode handler (highest priority)
+    if (
+      handleUnlockOverlayMode({
+        Input,
+        state,
+        closeOverlay,
+        ensureInitialized: restoreOrDefault,
+        clearAllSlotsToBlank,
+        playUIConfirmBlip,
+        playUIBackBlip
+      })
+    ) {
       return;
     }
 
-    if (Input.pressed("Back")) {
-      Input.consume("Back");
-      playUIBackBlip();
+    setLastScreen("select");
 
-      if (confirmPending) {
-        resetConfirm();
-        persistSelectStateByBase();
-        return;
-      }
-
-      goHome();
+    // 2) Confirm pending handler
+    if (
+      handleConfirmPending({
+        Input,
+        mouse,
+        state,
+        pointInRect,
+        homeCornerRect: () => homeCornerRect({ SCREEN, L }),
+        battleCornerRect: () => battleCornerRect({ SCREEN, L }),
+        baseVisible,
+        persist,
+        confirmPicks,
+        playUIBackBlip,
+        playUIConfirmBlip
+      })
+    ) {
       return;
     }
 
-    if (confirmPending) {
-      // ✅ Confirm-pending: keyboard Confirm commits; mouse/tap uses corner buttons.
-      if (inputMode === "keyboard" && Input.pressed("Confirm")) {
-        Input.consume("Confirm");
-        confirmPicks(baseVisible);
-        resetConfirm();
-        return;
-      }
+    // 2.25) Dropdown hover-follow + block slot hover while mouse is over dropdown
+    let dropdownHoverBlocking = false;
+    try {
+      dropdownHoverBlocking = handleSearchHover({ mouse, state, SCREEN, L });
+    } catch {}
 
-      // Mouse/touch while confirm-pending:
-      // - Left corner button = Back (cancel)
-      // - Right corner button = Confirm (start)
-      // - Anywhere else = Back (cancel)
-      if (mouse?.clicked) {
-        const mx = mouse.x;
-        const my = mouse.y;
+    // 2.5) Search pointer (dropdown clicks + pick-slot placement clicks)
+    try {
+      const handledSearch = handleSearchPointer({
+        mouse,
+        state,
+        SCREEN,
+        L,
+        pointInRect,
+        searchRects: () => searchRects({ SCREEN, L }),
+        slotBounds: (i) => slotBounds({ i, SLOT_COUNT, SCREEN, L }),
+        baseVisible,
+        onPlaceMovie: (slotIndex, baseMovieIndex) => {
+          state.slots[slotIndex] = baseMovieIndex;
+          state.focus = "movies";
+          state.activeSlot = slotIndex;
+          state.confirmPending = false;
 
-        if (pointInRect(mx, my, homeCornerRect())) {
-          playUIBackBlip();
-          resetConfirm();
-          persistSelectStateByBase();
-          return;
-        }
+          // picking a slot cancels archetype lock
+          state.archetypeIndex = 0;
+          state.archetypeConfirmed = false;
 
-        if (pointInRect(mx, my, battleCornerRect())) {
+          // ✅ reset search UI after placing
+          state.searchQuery = "";
+          try {
+            closeSearchDropdown(state);
+          } catch {}
+
+          persist();
           playUIConfirmBlip();
-          confirmPicks(baseVisible);
-          resetConfirm();
-          return;
-        }
+        },
+        onCancelPickMode: () => {
+          try {
+            exitPickSlotMode(state);
+            closeSearchDropdown(state);
+          } catch {}
+          persist();
+          playUIBackBlip();
+        },
+        onEnterPickMode: (baseMovieIndex) => {
+          try {
+            enterPickSlotMode(state, baseMovieIndex);
+            closeSearchDropdown(state);
+          } catch {}
+          persist();
+          playUIConfirmBlip();
+        },
+        playUIMoveBlip,
+        persist
+      });
 
-        playUIBackBlip();
-        resetConfirm();
-        persistSelectStateByBase();
-        return;
-      }
+      if (handledSearch) return;
+    } catch {}
 
+    // 3) Global hotkeys (Clear/Back)
+    if (
+      handleGlobalHotkeys({
+        Input,
+        state,
+        persist,
+        goHome,
+        clearAllSlotsToBlank,
+        playUIBackBlip,
+        playUIConfirmBlip
+      })
+    ) {
       return;
     }
 
-    if (Input.pressed("Toggle")) {
-      Input.consume("Toggle");
-      resetConfirm();
+    // --- Focus change should close dropdown immediately ---
+    const prevFocus = state.focus;
 
-      if (focus === "search") focus = "movies";
-      else focus = focus === "movies" ? "archetypes" : "movies";
-
-      persistSelectStateByBase();
-      playUIMoveBlip();
+    // 4) Toggle focus
+    if (
+      handleToggleFocus({
+        Input,
+        state,
+        persist,
+        playUIMoveBlip
+      })
+    ) {
+      try {
+        closeSearchDropdown(state);
+      } catch {}
       return;
     }
 
-    if (Input.pressed("Randomize")) {
-      Input.consume("Randomize");
-      archetypeIndex = 0;
-      archetypeConfirmed = false;
-
-      randomizeSlots(baseVisible.length, displayToBase, true);
-      onPressRandomizeMaybeStartTrial();
-
+    // 5) Randomize actions
+    if (
+      handleRandomizeActions({
+        Input,
+        state,
+        baseVisible,
+        displayToBase,
+        onPressRandomizeMaybeStartTrial,
+        randomizeSlots,
+        randomizeSlotsCommonGenre,
+        persist,
+        playUIMoveBlip
+      })
+    ) {
+      try {
+        closeSearchDropdown(state);
+      } catch {}
       if (GameState.currentScreen !== "select") return;
       return;
     }
 
-    if (Input.pressed("GenreRandomize")) {
-      Input.consume("GenreRandomize");
-      archetypeIndex = 0;
-      archetypeConfirmed = false;
-
-      const ok = randomizeSlotsCommonGenre(baseVisible, displayToBase, true);
-      if (!ok) randomizeSlots(baseVisible.length, displayToBase, true);
+    // 6) Confirm pressed (enter)
+    if (
+      handleConfirmPressed({
+        Input,
+        state,
+        archetypes,
+        setArchetypeByIndex,
+        persist,
+        playUIConfirmBlip,
+        playUIBackBlip
+      })
+    ) {
+      try {
+        closeSearchDropdown(state);
+      } catch {}
       return;
     }
 
-    if (inputMode === "keyboard" && Input.pressed("Confirm")) {
-      Input.consume("Confirm");
-
-      if (focus === "search") {
-        try {
-          const next = window.prompt("Search movies by title:", searchQuery || "");
-          if (next !== null) {
-            searchQuery = String(next || "").trim();
-            resetConfirm();
-            persistSelectStateByBase();
-            playUIConfirmBlip();
-          } else {
-            playUIBackBlip();
-          }
-        } catch {
-          playUIBackBlip();
-        }
-        return;
-      }
-
-      if (focus === "archetypes") {
-        if (!archetypeConfirmed) {
-          archetypeConfirmed = true;
-          confirmedArchetypeIndex = clampIndex(archetypeIndex, archetypes.length);
-          setArchetypeByIndex(confirmedArchetypeIndex);
-          resetConfirm();
-          persistSelectStateByBase();
-          playUIConfirmBlip();
-          return;
-        }
-
-        confirmPending = true;
-        persistSelectStateByBase();
-        playUIConfirmBlip();
-        return;
-      }
-
-      confirmPending = true;
-      persistSelectStateByBase();
-      playUIConfirmBlip();
-      return;
+    // 7) Keyboard navigation (slots/archetypes)
+    if (
+      handleKeyboardNavigation({
+        Input,
+        state,
+        baseVisibleLen: baseVisible.length,
+        displayToBase,
+        archetypesLen: archetypes.length,
+        setArchetypeByIndex,
+        cycleSlotWithOptionalFilter,
+        clampIndex,
+        persist,
+        playUIMoveBlip
+      })
+    ) {
+      // continue
     }
 
-    // Keyboard navigation
-    if (inputMode === "keyboard") {
-      if (focus === "movies") {
-        if (Input.pressed("Left")) {
-          Input.consume("Left");
-          activeSlot = (activeSlot - 1 + SLOT_COUNT) % SLOT_COUNT;
-          resetConfirm();
-          persistSelectStateByBase();
-          playUIMoveBlip();
-        }
-        if (Input.pressed("Right")) {
-          Input.consume("Right");
-          activeSlot = (activeSlot + 1) % SLOT_COUNT;
-          resetConfirm();
-          persistSelectStateByBase();
-          playUIMoveBlip();
-        }
-        if (Input.pressed("Up")) {
-          Input.consume("Up");
-          if (archetypeIndex !== 0) archetypeIndex = 0;
-          archetypeConfirmed = false;
-          cycleSlotWithOptionalFilter(activeSlot, -1, displayToBase, baseVisible.length);
-          resetConfirm();
-          persistSelectStateByBase();
-          playUIMoveBlip();
-        }
-        if (Input.pressed("Down")) {
-          Input.consume("Down");
-          if (archetypeIndex !== 0) archetypeIndex = 0;
-          archetypeConfirmed = false;
-          cycleSlotWithOptionalFilter(activeSlot, +1, displayToBase, baseVisible.length);
-          resetConfirm();
-          persistSelectStateByBase();
-          playUIMoveBlip();
-        }
-      } else if (focus === "archetypes") {
-        if (Input.pressed("Left")) {
-          Input.consume("Left");
-          if (!archetypeConfirmed) {
-            archetypeIndex = clampIndex(archetypeIndex - 1, archetypes.length);
-            setArchetypeByIndex(archetypeIndex);
-            resetConfirm();
-            persistSelectStateByBase();
+    // If focus changed this frame, close dropdown immediately.
+    if (state.focus !== prevFocus) {
+      try {
+        closeSearchDropdown(state);
+      } catch {}
+    }
+
+    const mouseOverDropdown = (() => {
+      try {
+        return !!isMouseOverSearchDropdown({ mouse, state });
+      } catch {
+        return false;
+      }
+    })();
+
+    // Hover (mouse sets focus + corner hover highlight)
+    if (!dropdownHoverBlocking && !mouseOverDropdown) {
+      handlePointerHover({
+        mouse,
+        state,
+        pointInRect,
+        homeCornerRect: () => homeCornerRect({ SCREEN, L }),
+        battleCornerRect: () => battleCornerRect({ SCREEN, L }),
+        searchRects: () => searchRects({ SCREEN, L }),
+        topArrowRect: (i) => topArrowRect({ i, SLOT_COUNT, SCREEN, L }),
+        bottomArrowRect: (i) => bottomArrowRect({ i, SLOT_COUNT, SCREEN, L }),
+        slotBounds: (i) => slotBounds({ i, SLOT_COUNT, SCREEN, L }),
+        archetypeBarRects: () => archetypeBarRects({ SCREEN, L }),
+        persist,
+        playUIMoveBlip
+      });
+    }
+
+    // ✅ Whole-slot click cycles up/down (unless dropdown blocks it)
+    if (state.inputMode === "mouse" && mouse?.clicked && !state.confirmPending) {
+      if (!mouseOverDropdown) {
+        const mx = mouse.x;
+        const my = mouse.y;
+
+        const inPickSlotMode = !!state.search?.pickSlotMode;
+        if (!inPickSlotMode) {
+          for (let i = 0; i < SLOT_COUNT; i++) {
+            const card = slotCardRect({ i, SLOT_COUNT, SCREEN, L });
+            if (pointInRect(mx, my, card)) {
+              const dir = my < card.y + card.h / 2 ? -1 : +1;
+
+              state.focus = "movies";
+              state.activeSlot = i;
+              state.archetypeIndex = 0;
+              state.archetypeConfirmed = false;
+              state.confirmPending = false;
+
+              cycleSlotWithOptionalFilter({
+                slots: state.slots,
+                slotIdx: i,
+                dir,
+                displayToBase,
+                baseLen: baseVisible.length
+              });
+
+              persist();
+              playUIMoveBlip();
+              return;
+            }
           }
-          playUIMoveBlip();
-        }
-        if (Input.pressed("Right")) {
-          Input.consume("Right");
-          if (!archetypeConfirmed) {
-            archetypeIndex = clampIndex(archetypeIndex + 1, archetypes.length);
-            setArchetypeByIndex(archetypeIndex);
-            resetConfirm();
-            persistSelectStateByBase();
-          }
-          playUIMoveBlip();
         }
       }
     }
 
-    // Mouse interactions
-    if (inputMode === "mouse" && mouse?.clicked) {
-      const mx = mouse.x;
-      const my = mouse.y;
+    // Pointer input (normal select interactions) — skip if dropdown blocks
+    if (!mouseOverDropdown) {
+      handlePointerInput({
+        mouse,
+        state,
+        pointInRect,
+        homeCornerRect: () => homeCornerRect({ SCREEN, L }),
+        battleCornerRect: () => battleCornerRect({ SCREEN, L }),
+        searchRects: () => searchRects({ SCREEN, L }),
+        topArrowRect: (i) => topArrowRect({ i, SLOT_COUNT, SCREEN, L }),
+        bottomArrowRect: (i) => bottomArrowRect({ i, SLOT_COUNT, SCREEN, L }),
+        slotBounds: (i) => slotBounds({ i, SLOT_COUNT, SCREEN, L }),
+        archetypeBarRects: () => archetypeBarRects({ SCREEN, L }),
+        baseVisible,
+        displayToBase,
+        archetypes,
+        clampIndex,
+        cycleSlotWithOptionalFilter,
+        setArchetypeByIndex,
+        persist,
+        goHome,
+        confirmPicks,
+        playUIBackBlip,
+        playUIConfirmBlip,
+        playUIMoveBlip
+      });
+    }
 
-      if (pointInRect(mx, my, homeCornerRect())) {
-        // ✅ In confirm-pending, left corner = BACK (cancel pending) rather than Home.
-        if (confirmPending) {
-          playUIBackBlip();
-          resetConfirm();
-          persistSelectStateByBase();
-          return;
-        }
-        goHome();
-        return;
-      }
+    // ✅ Mobile keyboard: focus hidden input when search is focused; blur otherwise
+    ensureSearchState(state);
 
-      if (confirmPending) {
-        if (pointInRect(mx, my, battleCornerRect())) {
-          playUIConfirmBlip();
-          confirmPicks(baseVisible);
-          resetConfirm();
-          return;
-        }
-        playUIBackBlip();
-        resetConfirm();
-        persistSelectStateByBase();
-        return;
-      }
+    const searchWantsKeyboard =
+      state.focus === "search" &&
+      !state.confirmPending &&
+      state.uiMode === "select" &&
+      !state.search?.pickSlotMode;
 
-      if (pointInRect(mx, my, battleCornerRect())) {
-        confirmPending = true;
-        persistSelectStateByBase();
-        playUIConfirmBlip();
-        return;
-      }
-
-      const sr = searchRects();
-      if (pointInRect(mx, my, sr.mid)) {
-        focus = "search";
-        resetConfirm();
-        persistSelectStateByBase();
-        playUIMoveBlip();
-        return;
-      }
-
-      // ✅ Arrow hitboxes MUST be checked before slotBounds,
-      // because slotBounds includes the arrow areas.
-      for (let i = 0; i < SLOT_COUNT; i++) {
-        if (pointInRect(mx, my, topArrowRect(i))) {
-          focus = "movies";
-          activeSlot = i;
-          archetypeIndex = 0;
-          archetypeConfirmed = false;
-          cycleSlotWithOptionalFilter(i, -1, displayToBase, baseVisible.length);
-          resetConfirm();
-          persistSelectStateByBase();
-          playUIMoveBlip();
-          return;
-        }
-        if (pointInRect(mx, my, bottomArrowRect(i))) {
-          focus = "movies";
-          activeSlot = i;
-          archetypeIndex = 0;
-          archetypeConfirmed = false;
-          cycleSlotWithOptionalFilter(i, +1, displayToBase, baseVisible.length);
-          resetConfirm();
-          persistSelectStateByBase();
-          playUIMoveBlip();
-          return;
-        }
-      }
-
-      for (let i = 0; i < SLOT_COUNT; i++) {
-        if (pointInRect(mx, my, slotBounds(i))) {
-          activeSlot = i;
-          focus = "movies";
-          resetConfirm();
-          persistSelectStateByBase();
-          playUIMoveBlip();
-          return;
-        }
-      }
-
-      const { left, right, center } = archetypeBarRects();
-
-      if (pointInRect(mx, my, left)) {
-        focus = "archetypes";
-        if (!archetypeConfirmed) {
-          archetypeIndex = clampIndex(archetypeIndex - 1, archetypes.length);
-          setArchetypeByIndex(archetypeIndex);
-          resetConfirm();
-          persistSelectStateByBase();
-        }
-        playUIMoveBlip();
-        return;
-      }
-      if (pointInRect(mx, my, right)) {
-        focus = "archetypes";
-        if (!archetypeConfirmed) {
-          archetypeIndex = clampIndex(archetypeIndex + 1, archetypes.length);
-          setArchetypeByIndex(archetypeIndex);
-          resetConfirm();
-          persistSelectStateByBase();
-        }
-        playUIMoveBlip();
-        return;
-      }
-      if (pointInRect(mx, my, center)) {
-        focus = focus === "movies" ? "archetypes" : "movies";
-        resetConfirm();
-        persistSelectStateByBase();
-        playUIMoveBlip();
-        return;
-      }
+    if (searchWantsKeyboard) {
+      focusSelectTextInput(state);
+    } else {
+      blurSelectTextInput();
     }
   },
 
   render(ctx) {
     setLastScreen("select");
-    ensureInitialized();
+    restoreOrDefault();
 
     const { base: baseVisible } = getDisplayMovies();
     const archetypes = getSelectableArchetypes();
 
-    const chosenIndex = archetypeConfirmed
-      ? clampIndex(confirmedArchetypeIndex, archetypes.length)
-      : clampIndex(archetypeIndex, archetypes.length);
+    const chosenIndex = state.archetypeConfirmed
+      ? clampIndex(state.confirmedArchetypeIndex, archetypes.length)
+      : clampIndex(state.archetypeIndex, archetypes.length);
 
     const chosenArchetype = archetypes[chosenIndex] || archetypes[0];
 
+    // Search state (optional)
+    let pickSlotMode = false;
+    try {
+      ensureSearchState(state);
+      pickSlotMode = !!state.search?.pickSlotMode;
+    } catch {}
+
     // BG
     ctx.fillStyle = C().bg || "#000";
-    ctx.fillRect(0, 0, W, H);
+    ctx.fillRect(0, 0, SCREEN.W, SCREEN.H);
 
     // Title
     ctx.fillStyle = L?.title?.color || "#fff";
     ctx.font = L?.title?.font || "15px monospace";
     ctx.fillText(L?.title?.text || "Pick Your Movies", Number(L?.title?.x ?? 12), Number(L?.title?.y ?? 24));
 
-    // Help
+    // Help / subtitle
     ctx.fillStyle = L?.help?.color || "#777";
     ctx.font = L?.help?.font || "9px monospace";
     const helpX = Number(L?.help?.x ?? 12);
     const helpY = Number(L?.help?.y ?? 40);
 
-    if (confirmPending) {
+    if (state.confirmPending) {
       ctx.fillText("Press Enter to Start Battle  Press Esc/Bksp to cancel.", helpX, helpY);
+    } else if (pickSlotMode) {
+      ctx.fillText("Pick a Slot For This Movie", helpX, helpY);
     } else {
-      const toggleHint = focus === "archetypes" ? "Toggle: Cycle Movies" : "Toggle: Cycle Archetypes";
-      ctx.fillText(`Enter: start  Esc/Bksp: back  R: Random  B: Clear  ${toggleHint}`, helpX, helpY);
+      const toggleHint = state.focus === "archetypes" ? "Toggle: Cycle Movies" : "Toggle: Cycle Archetypes";
+      ctx.fillText(`R: Random  B: Clear  ${toggleHint}`, helpX, helpY);
     }
 
     // Search row
-    const sr = searchRects();
+    const sr = searchRects({ SCREEN, L });
     const s = L?.search || {};
 
     ctx.fillStyle = C().panel || "#111";
     ctx.fillRect(sr.left.x, sr.left.y, sr.left.w, sr.left.h);
-    ctx.strokeStyle = focus === "search" ? (C().highlight || "#ff0") : (C().stroke || "#555");
+    ctx.strokeStyle = state.focus === "search" ? C().highlight || "#ff0" : C().stroke || "#555";
     ctx.strokeRect(sr.left.x, sr.left.y, sr.left.w, sr.left.h);
     ctx.fillStyle = C().text || "#fff";
     ctx.font = s.iconFont || "13px monospace";
@@ -1711,15 +1053,42 @@ export const SelectScreen = {
 
     ctx.fillStyle = C().panel || "#111";
     ctx.fillRect(sr.mid.x, sr.mid.y, sr.mid.w, sr.mid.h);
-    ctx.strokeStyle = focus === "search" ? (C().highlight || "#ff0") : (C().stroke || "#555");
+    ctx.strokeStyle = state.focus === "search" ? (C().highlight || "#ff0") : (C().stroke || "#555");
     ctx.strokeRect(sr.mid.x, sr.mid.y, sr.mid.w, sr.mid.h);
-    ctx.fillStyle = C().textDim || "#aaa";
+
+    const isSearchFocused = state.focus === "search";
+    const queryText = String(state.searchQuery || "");
+    const placeholder = String(s.placeholder || "search");
+
     ctx.font = s.font || "11px monospace";
-    ctx.fillText(searchQuery ? searchQuery : (s.placeholder || "search"), sr.mid.x + 10, sr.mid.y + 15);
+
+    if (!isSearchFocused && !queryText) {
+      ctx.fillStyle = C().textDim || "#aaa";
+      ctx.fillText(placeholder, sr.mid.x + 10, sr.mid.y + 15);
+    } else {
+      ctx.fillStyle = C().text || "#fff";
+      ctx.fillText(queryText, sr.mid.x + 10, sr.mid.y + 15);
+
+      if (isSearchFocused) {
+        const blinkOn = Math.floor(Date.now() / 450) % 2 === 0;
+        if (blinkOn) {
+          const w = ctx.measureText(queryText).width;
+          const cx = sr.mid.x + 10 + w + 2;
+          const top = sr.mid.y + 5;
+          const bottom = sr.mid.y + sr.mid.h - 5;
+
+          ctx.beginPath();
+          ctx.moveTo(cx, top);
+          ctx.lineTo(cx, bottom);
+          ctx.strokeStyle = C().text || "#fff";
+          ctx.stroke();
+        }
+      }
+    }
 
     ctx.fillStyle = C().panel || "#111";
     ctx.fillRect(sr.right.x, sr.right.y, sr.right.w, sr.right.h);
-    ctx.strokeStyle = focus === "search" ? (C().highlight || "#ff0") : (C().stroke || "#555");
+    ctx.strokeStyle = state.focus === "search" ? C().highlight || "#ff0" : C().stroke || "#555";
     ctx.strokeRect(sr.right.x, sr.right.y, sr.right.w, sr.right.h);
     ctx.fillStyle = C().text || "#fff";
     ctx.font = s.iconFont || "13px monospace";
@@ -1732,26 +1101,26 @@ export const SelectScreen = {
     const np = S()?.nameplate || {};
 
     for (let i = 0; i < SLOT_COUNT; i++) {
-      const v = slots[i];
+      const v = state.slots[i];
       const isSpecial = isSpecialSlotValue(v);
       const movie = !isSpecial ? baseVisible[v] : null;
 
-      const isActiveMovieSlot = focus === "movies" && i === activeSlot;
+      const isActiveMovieSlot = state.focus === "movies" && i === state.activeSlot;
 
-      const card = slotCardRect(i);
-      const upR = topArrowRect(i);
-      const pr = posterRect(i);
-      const nameR = nameplateRect(i);
-      const downR = bottomArrowRect(i);
+      const card = slotCardRect({ i, SLOT_COUNT, SCREEN, L });
+      const upR = topArrowRect({ i, SLOT_COUNT, SCREEN, L });
+      const pr = posterRect({ i, SLOT_COUNT, SCREEN, L });
+      const nameR = nameplateRect({ i, SLOT_COUNT, SCREEN, L });
+      const downR = bottomArrowRect({ i, SLOT_COUNT, SCREEN, L });
 
-      // Card highlight outline
-      ctx.strokeStyle = isActiveMovieSlot ? (C().highlight || "#ff0") : (C().stroke || "#555");
+      // Card outline
+      ctx.strokeStyle = isActiveMovieSlot ? C().highlight || "#ff0" : C().stroke || "#555";
       ctx.strokeRect(card.x, card.y, card.w, card.h);
 
       // Top arrow box
       ctx.fillStyle = C().panel || "#111";
       ctx.fillRect(upR.x, upR.y, upR.w, upR.h);
-      ctx.strokeStyle = isActiveMovieSlot ? (C().highlight || "#ff0") : (C().stroke || "#555");
+      ctx.strokeStyle = isActiveMovieSlot ? C().highlight || "#ff0" : C().stroke || "#555";
       ctx.strokeRect(upR.x, upR.y, upR.w, upR.h);
 
       ctx.fillStyle = C().text || "#fff";
@@ -1766,9 +1135,8 @@ export const SelectScreen = {
       ctx.fillStyle = C().panel || "#111";
       ctx.fillRect(pr.x, pr.y, pr.w, pr.h);
 
-      // Poster image / special art
       if (isSpecial) {
-        drawSpecialPoster(ctx, pr, v);
+        drawSpecialPoster(ctx, pr, v, { C, SLOT_TOKEN_BLANK, SLOT_TOKEN_RANDOM, GENRE_TOKEN_TO_DEF });
       } else {
         const posterPath = getLocalPosterPath(movie);
         if (posterPath) {
@@ -1794,7 +1162,7 @@ export const SelectScreen = {
       // Nameplate
       ctx.fillStyle = np.bg || (C().panel || "#111");
       ctx.fillRect(nameR.x, nameR.y, nameR.w, nameR.h);
-      ctx.strokeStyle = isActiveMovieSlot ? (C().highlight || "#ff0") : (C().stroke || "#555");
+      ctx.strokeStyle = isActiveMovieSlot ? C().highlight || "#ff0" : C().stroke || "#555";
       ctx.strokeRect(nameR.x, nameR.y, nameR.w, nameR.h);
 
       ctx.fillStyle = "#ddd";
@@ -1808,7 +1176,7 @@ export const SelectScreen = {
       // Bottom arrow box
       ctx.fillStyle = C().panel || "#111";
       ctx.fillRect(downR.x, downR.y, downR.w, downR.h);
-      ctx.strokeStyle = isActiveMovieSlot ? (C().highlight || "#ff0") : (C().stroke || "#555");
+      ctx.strokeStyle = isActiveMovieSlot ? C().highlight || "#ff0" : C().stroke || "#555";
       ctx.strokeRect(downR.x, downR.y, downR.w, downR.h);
 
       ctx.fillStyle = C().text || "#fff";
@@ -1819,15 +1187,21 @@ export const SelectScreen = {
 
       ctx.textAlign = "left";
       ctx.textBaseline = "alphabetic";
+
+      // Pick-slot mode overlay (greys out slots)
+      if (pickSlotMode) {
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillRect(card.x + 1, card.y + 1, card.w - 2, card.h - 2);
+      }
     }
 
     // corner buttons
-    const home = homeCornerRect();
-    const battle = battleCornerRect();
+    const home = homeCornerRect({ SCREEN, L });
+    const battle = battleCornerRect({ SCREEN, L });
 
     ctx.fillStyle = C().panel || "#111";
     ctx.fillRect(home.x, home.y, home.w, home.h);
-    ctx.strokeStyle = confirmPending ? (C().highlight || "#ff0") : (C().stroke || "#555");
+    ctx.strokeStyle = state.confirmPending || state.hoverCorner === "home" ? C().highlight || "#ff0" : C().stroke || "#555";
     ctx.strokeRect(home.x, home.y, home.w, home.h);
     ctx.fillStyle = C().text || "#fff";
     ctx.font = "15px monospace";
@@ -1835,22 +1209,19 @@ export const SelectScreen = {
 
     ctx.fillStyle = C().panel || "#111";
     ctx.fillRect(battle.x, battle.y, battle.w, battle.h);
-    ctx.strokeStyle = confirmPending ? (C().highlight || "#ff0") : (C().stroke || "#555");
+    ctx.strokeStyle = state.confirmPending || state.hoverCorner === "battle" ? C().highlight || "#ff0" : C().stroke || "#555";
     ctx.strokeRect(battle.x, battle.y, battle.w, battle.h);
     ctx.fillStyle = C().text || "#fff";
     ctx.font = "15px monospace";
     ctx.fillText("⚔", battle.x + 4, battle.y + 17);
 
     // archetype bar
-    const A = archetypeBarRects();
-    ctx.strokeStyle = focus === "archetypes" ? (C().highlight || "#ff0") : (C().stroke || "#555");
-    ctx.strokeRect(A.bar.x, A.bar.y, A.bar.w, A.bar.h);
-
+    const A = archetypeBarRects({ SCREEN, L });
     const ac = bottom()?.archetype || {};
 
     ctx.fillStyle = C().panel || "#111";
     ctx.fillRect(A.left.x, A.left.y, A.left.w, A.left.h);
-    ctx.strokeStyle = focus === "archetypes" ? (C().highlight || "#ff0") : (C().stroke || "#555");
+    ctx.strokeStyle = state.focus === "archetypes" ? C().highlight || "#ff0" : C().stroke || "#555";
     ctx.strokeRect(A.left.x, A.left.y, A.left.w, A.left.h);
     ctx.fillStyle = C().text || "#fff";
     ctx.font = ac.iconFont || "15px monospace";
@@ -1858,7 +1229,7 @@ export const SelectScreen = {
 
     ctx.fillStyle = C().panel || "#111";
     ctx.fillRect(A.right.x, A.right.y, A.right.w, A.right.h);
-    ctx.strokeStyle = focus === "archetypes" ? (C().highlight || "#ff0") : (C().stroke || "#555");
+    ctx.strokeStyle = state.focus === "archetypes" ? C().highlight || "#ff0" : C().stroke || "#555";
     ctx.strokeRect(A.right.x, A.right.y, A.right.w, A.right.h);
     ctx.fillStyle = C().text || "#fff";
     ctx.font = ac.iconFont || "15px monospace";
@@ -1866,10 +1237,10 @@ export const SelectScreen = {
 
     ctx.fillStyle = C().panel || "#111";
     ctx.fillRect(A.center.x, A.center.y, A.center.w, A.center.h);
-    ctx.strokeStyle = focus === "archetypes" ? (C().highlight || "#ff0") : (C().stroke || "#555");
+    ctx.strokeStyle = state.focus === "archetypes" ? C().highlight || "#ff0" : C().stroke || "#555";
     ctx.strokeRect(A.center.x, A.center.y, A.center.w, A.center.h);
 
-    const lockTag = archetypeConfirmed && chosenArchetype?.id !== "custom" ? " ✓" : "";
+    const lockTag = state.archetypeConfirmed && chosenArchetype?.id !== "custom" ? " ✓" : "";
     const label = `${chosenArchetype?.name || "Custom"}${lockTag}`;
 
     const fitted = fitTextByShrinking(
@@ -1884,28 +1255,46 @@ export const SelectScreen = {
     ctx.font = `${fitted.px}px monospace`;
     ctx.fillText(fitted.text, A.center.x + 8, A.center.y + 16);
 
+    // ✅ Search dropdown (draw AFTER slots so it is superimposed on top)
+    try {
+      renderSearchDropdown(ctx, {
+        state,
+        SCREEN,
+        L,
+        colors: C(),
+        baseVisible,
+        movieMeta: state.movieMeta,
+        getLocalPosterPath,
+        ImageCache
+      });
+    } catch {}
+
     // confirm banner
-    if (confirmPending) {
-      const r = confirmBoxRect();
+    if (state.confirmPending) {
+      const r = confirmBoxRect({ L });
+
       ctx.fillStyle = "#000";
       ctx.fillRect(r.x, r.y, r.w, r.h);
       ctx.strokeStyle = "#fff";
       ctx.strokeRect(r.x, r.y, r.w, r.h);
 
-      if (hasBlankSlot()) {
-        ctx.fillStyle = "#f66";
-        ctx.font = L?.confirm?.font || "9px monospace";
-        ctx.fillText("BLANK slot selected — cannot start.", r.x + 8, r.y + 13);
-      } else {
-        ctx.fillStyle = L?.confirm?.color || "#ff0";
-        ctx.font = L?.confirm?.font || "9px monospace";
-        ctx.fillText(L?.confirm?.text || "Ready to start battle.", r.x + 8, r.y + 13);
-      }
+      const blank = hasBlankSlot(state.slots, SLOT_COUNT);
+      const text = blank ? "BLANK slot selected — cannot start." : L?.confirm?.text || "Ready to start battle.";
+
+      ctx.fillStyle = blank ? "#f66" : L?.confirm?.color || "#ff0";
+      ctx.font = L?.confirm?.font || "9px monospace";
+
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(text, r.x + r.w / 2, r.y + r.h / 2);
+
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
     }
 
     // Unlock overlay
-    if (uiMode === "unlock") {
-      const payload = overlayPayload || {};
+    if (state.uiMode === "unlock") {
+      const payload = state.overlayPayload || {};
       const party = (payload.movieIds || []).slice(0, 4).map(getMovieById);
 
       renderUnlockArcOverlay(ctx, {

@@ -67,27 +67,15 @@ export const SELECT_LAYOUT = {
   // - Keep slot aspect 2:3 (same as posters)
   // - Ensure no overlap with nameplate + bottom arrow + bottom bar
   slots: {
-  poster: {
-    shrink: 1
-    },
     y: 96,
-
-    // Slot box size (2:3 aspect)
-    // Was 80x120; now slightly smaller to give more breathing room
     w: 72,
     h: 108,
-
-    // Tighten gap so 4 slots still look centered and clean
     gap: 12,
-
-    // Height of the arrow button boxes (top overlay + bottom below nameplate)
     arrowHitH: 16,
 
-    // Poster uses the full slot area; keep pads at 0
-    poster: { aspect: 2 / 3, padX: 0, padY: 0 },
+    // ✅ merged (no duplicate key)
+    poster: { aspect: 2 / 3, padX: 0, padY: 0, shrink: 1 },
 
-    // Nameplate sits directly under the slot box.
-    // IMPORTANT: basePosterH must match slots.h for correct stacking math in select.js
     nameplate: {
       gap: 3,
       basePosterH: 108,
@@ -102,11 +90,10 @@ export const SELECT_LAYOUT = {
     arrowUpChar: "▲",
     arrowDownChar: "▼",
 
-    // These are legacy offsets used by older arrow drawing styles.
-    // If your current select.js draws centered in the arrow boxes, these can stay.
     arrowDyUp: -3,
     arrowDyDown: 13
   },
+
 
   bottom: {
     cornerBtn: 23,
@@ -138,10 +125,10 @@ export const SELECT_LAYOUT = {
   },
 
   confirm: {
-    box: { x: 40, y: 100, w: 320, h: 18 },
+    box: { x: 20, y: 120, w: 360, h: 18 },
     font: "9px monospace",
     color: "#ff0",
-    text: "Ready to start battle?"
+    text: "Ready to Start Battle?"
   }
 };
 
@@ -155,7 +142,7 @@ export const QUICKPLAY_LAYOUT = {
 // -------------------------
 export const QUICKPLAY_SCREEN_LAYOUT = {
   title: { x: 12, y: 24, font: "14px monospace", color: "#fff" },
-  subtitle: { x: 12, y: 40, font: "10px monospace", color: "#fff" },
+  subtitle: { x: 12, y: 40, font: "10px monospace", color: "#777" },
 
   list: {
     leftX: 25,
@@ -178,7 +165,17 @@ export const QUICKPLAY_SCREEN_LAYOUT = {
     font: "10px monospace",
     color: "#ff0",
     padX: 10,
-    textY: 16
+    textY: 16,
+
+    confirm: {
+      box: { x: 20, y: 120, w: 360, h: 18 },
+      font: "10px monospace",
+      color: "#ff0",
+      template: "Confirmed: {name}",
+      align: "center",
+      padX: 10,
+      textY: 12
+    }
   },
 
   toast: {

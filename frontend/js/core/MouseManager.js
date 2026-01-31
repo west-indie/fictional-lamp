@@ -17,8 +17,9 @@
 //
 // ✅ Minimal fixes:
 // - Clamp to SCREEN.W-1 / SCREEN.H-1 (avoids edge-case "x===SCREEN.W").
-// - Remove armAudio() from pointermove (not a valid autoplay gesture; reduces spam).
 // - Keep armAudio() on pointerdown / pointerup (gesture-valid).
+// - ✅ NEW: Add window-level pointerup/pointercancel listeners as a fallback,
+//          so taps/clicks always register even if pointer capture fails.
 // - No other behavior changes.
 
 import { SCREEN } from "../layout.js";
@@ -79,6 +80,34 @@ export function createMouse(canvas) {
   let activePointerId = null;
   let downStartedOnCanvas = false;
 
+  function onPointerUpLike(e) {
+    if (activePointerId == null || e.pointerId !== activePointerId) return;
+
+    const p = eventToGameXY(canvas, e);
+    mouse.x = p.x;
+    mouse.y = p.y;
+    mouse.moved = true;
+
+    mouse.down = false;
+    mouse.released = true;
+
+    // "Clicked" fires on release (matches existing screen expectations).
+    if (downStartedOnCanvas) {
+      mouse.clicked = true;
+      mouse.tapped = true; // alias
+    }
+
+    downStartedOnCanvas = false;
+    activePointerId = null;
+
+    // ✅ Another gesture-valid place to attempt audio unlock.
+    try { armAudio(); } catch {}
+
+    try {
+      e.preventDefault();
+    } catch {}
+  }
+
   canvas.addEventListener(
     "pointerdown",
     (e) => {
@@ -119,43 +148,18 @@ export function createMouse(canvas) {
       mouse.x = p.x;
       mouse.y = p.y;
       mouse.moved = true;
-
-      // NOTE: we intentionally do NOT call armAudio() here.
-      // Mouse movement is not a reliable autoplay gesture in browsers.
     },
     { passive: true }
   );
 
-  function onPointerUpLike(e) {
-    if (activePointerId == null || e.pointerId !== activePointerId) return;
-
-    const p = eventToGameXY(canvas, e);
-    mouse.x = p.x;
-    mouse.y = p.y;
-    mouse.moved = true;
-
-    mouse.down = false;
-    mouse.released = true;
-
-    // "Clicked" fires on release (matches existing screen expectations).
-    if (downStartedOnCanvas) {
-      mouse.clicked = true;
-      mouse.tapped = true; // alias
-    }
-
-    downStartedOnCanvas = false;
-    activePointerId = null;
-
-    // ✅ Another gesture-valid place to attempt audio unlock.
-    try { armAudio(); } catch {}
-
-    try {
-      e.preventDefault();
-    } catch {}
-  }
-
+  // Canvas-level up/cancel
   canvas.addEventListener("pointerup", onPointerUpLike, { passive: false });
   canvas.addEventListener("pointercancel", onPointerUpLike, { passive: false });
+
+  // ✅ NEW: window-level fallback up/cancel
+  // This ensures clicks/taps still register even if pointer capture fails.
+  window.addEventListener("pointerup", onPointerUpLike, { passive: false });
+  window.addEventListener("pointercancel", onPointerUpLike, { passive: false });
 
   // Mobile: stop browser panning/zooming on touch.
   try {

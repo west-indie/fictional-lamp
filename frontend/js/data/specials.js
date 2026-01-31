@@ -1452,6 +1452,190 @@ export const specials = {
       { includeGenre: false } 
     ]
   },
+  harry_potter_2001: {
+    pages: [
+      // Page 0 (default)
+      [
+        {
+          id: "wingardium_leviosa",
+          name: "Wingardium Leviosa",
+          description: "A clean levitation charm smacks the enemy with textbook precision.",
+          kind: "damageEnemy",
+          target: "enemy",
+          powerMultiplier: 1.70,
+          cooldownTurns: 3
+        }
+      ],
+      // Page 1 (extra)
+      [
+        {
+          id: "expelliarmus",
+          name: "Expelliarmus",
+          description: "Disarms the enemy, throwing off their rhythm and lowering their attack.",
+          kind: "ENEMY_DEBUFF",
+          target: "enemy",
+          atkPct: 0.25,
+          defPct: 0.0,
+          turns: 2,
+          cooldownTurns: 4
+        },
+        {
+          id: "protego",
+          name: "Protego",
+          description: "A protective barrier that hardens your defenses for a few turns.",
+          kind: "SELF_BUFF",
+          target: "self",
+          atkPct: 0.0,
+          defPct: 0.30,
+          turns: 2,
+          cooldownTurns: 3
+        },
+        {
+          id: "sorting_hat",
+          name: "Sorting Hat",
+          description: "Finds your house confidence—boosting both poise and presence.",
+          kind: "SELF_BUFF",
+          target: "self",
+          atkPct: 0.15,
+          defPct: 0.15,
+          turns: 3,
+          cooldownTurns: 4
+        }
+      ]
+    ],
+    pageMeta: [
+      { includeGenre: true },
+      { includeGenre: false }
+    ]
+  },
+
+  love_and_mercy: {
+    pages: [
+      // Page 0 (default)
+      [
+        {
+          id: "good_vibrations_hit",
+          name: "Good Vibrations",
+          description: "A soaring hook lands as a warm, heavy hit.",
+          kind: "damageEnemy",
+          target: "enemy",
+          powerMultiplier: 1.75,
+          cooldownTurns: 3
+        }
+      ],
+      // Page 1 (extra)
+      [
+        {
+          id: "pet_sounds",
+          name: "Pet Sounds",
+          description: "Layer by layer, you build something perfect—boosting your offense.",
+          kind: "SELF_BUFF",
+          target: "self",
+          atkPct: 0.25,
+          defPct: 0.0,
+          turns: 2,
+          cooldownTurns: 3
+        },
+        {
+          id: "god_only_knows",
+          name: "God Only Knows",
+          description: "It's a love song...AND a suicide note!",
+          kind: "healAllyAndHit",
+          target: ["ally", "heal", "enemy", "hit"],
+          missingHealPct: 0.55,
+          powerMultiplier: 1.45,
+          cooldownTurns: 4
+        },
+        {
+          id: "surfs_up",
+          name: "Surf's Up",
+          description: "A children's song that flows into a spiritual awakening of the mind and soul, allowing you to give yourself to god.",
+          kind: "healSelfMissingPct",
+          target: "self",
+          amount: 0.9,
+          cooldownTurns: 5
+        }
+
+      ]
+    ],
+    pageMeta: [
+      { includeGenre: true },
+      { includeGenre: false }
+    ]
+  },
+
+  steve_jobs_2015: {
+    pages: [
+      // Page 0 (default)
+      [
+        {
+          id: "keynote_reveal",
+          name: "Keynote Reveal",
+          description: "A perfectly timed unveiling that hits with sharp impact.",
+          kind: "damageEnemy",
+          target: "enemy",
+          powerMultiplier: 1.70,
+          cooldownTurns: 3
+        },
+        {
+          id: "reality_distortion_field",
+          name: "Reality Distortion Field",
+          description: "Bends the conversation—weakening the enemy’s offense and defense.",
+          kind: "ENEMY_DEBUFF",
+          target: "enemy",
+          atkPct: 0.20,
+          defPct: 0.20,
+          turns: 2,
+          cooldownTurns: 4
+        },
+        ],
+        [        
+        {
+          id: "product_vision",
+          name: "Product Vision",
+          description: "Locks in the endgame—boosting your attack for the next exchange.",
+          kind: "SELF_BUFF",
+          target: "self",
+          atkPct: 0.30,
+          defPct: 0.0,
+          turns: 2,
+          cooldownTurns: 3
+        },
+        {
+          id: "kill_your_darlings",
+          name: "Kill Your Darlings",
+          description: "You cut what doesn’t matter. Momentum stalls, and only the essentials remain.",
+          kind: "STATUS",
+          target: ["enemy", "status"],
+          status: "cooldown_lock",
+          turns: 2,
+          nextHitVulnActive: true,
+          nextHitVulnPct: 0.35,
+          nextHitVulnTurns: 2,
+          cooldownTurns: 5
+        },
+        {
+          id: "the_orchestra",
+          name: "Play The Orchestra",
+          description: "You conduct the moment. Every part locks in at once—your entire team surges forward in perfect sync.",
+          kind: "teamStrikeBuff",
+          target: ["team", "teamStrike", "buff"],
+          atkPct: 0.30,
+          defPct: 0.25,
+          turns: 2,
+          totalMinMult: 1.6,
+          totalMaxMult: 2.6,
+          cooldownTurns: 5
+        }
+
+      ]
+    ],
+    pageMeta: [
+      { includeGenre: true },
+      { includeGenre: false }
+    ]
+  },
+
 };
 
 // -----------------------------

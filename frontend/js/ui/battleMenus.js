@@ -103,7 +103,17 @@ export function drawMiniButton(ctx, rect, label, isHot = false) {
 
 export function drawTopMiniButtons(
   ctx,
-  { SCREEN, BATTLE_LAYOUT, uiBaseY, slotCount, buttonW, itemSlotsPerPage, rightLabel, hotBack = false, hotRight = false }
+  {
+    SCREEN,
+    BATTLE_LAYOUT,
+    uiBaseY,
+    slotCount,
+    buttonW,
+    itemSlotsPerPage,
+    rightLabel,
+    hotBack = false,
+    hotRight = false
+  }
 ) {
   const { backRect, rightRect } = getTopMiniRects({
     SCREEN,
@@ -197,9 +207,12 @@ export function drawCommandMenu(ctx, { SCREEN, BATTLE_LAYOUT, uiBaseY, actions, 
     const isCursor = i === state.actionIndex && state.phase === "player";
     const isLocked = confirming && a === state.confirmAction;
     const isDisabled = confirming && a !== state.confirmAction;
+    const isHover = hover?.kind === "action" && hover?.index === i;
 
+    // ✅ Updated highlight style:
+    // Selected/locked -> black bg, yellow border, yellow text
     if (isLocked) {
-      ctx.fillStyle = "#444";
+      ctx.fillStyle = "#000";
       ctx.fillRect(bx, by, buttonW, buttonH);
       ctx.strokeStyle = "#ff0";
     } else if (isDisabled) {
@@ -207,20 +220,22 @@ export function drawCommandMenu(ctx, { SCREEN, BATTLE_LAYOUT, uiBaseY, actions, 
       ctx.fillRect(bx, by, buttonW, buttonH);
       ctx.strokeStyle = "#555";
     } else if (isCursor) {
-      ctx.fillStyle = "#444";
+      ctx.fillStyle = "#000";
       ctx.fillRect(bx, by, buttonW, buttonH);
       ctx.strokeStyle = "#ff0";
     } else {
       ctx.fillStyle = "#000";
       ctx.fillRect(bx, by, buttonW, buttonH);
-      const isHover = hover?.kind === "action" && hover?.index === i;
       ctx.strokeStyle = isHover ? "#ff0" : "#fff";
     }
 
     ctx.strokeRect(bx, by, buttonW, buttonH);
 
     ctx.font = "9px monospace";
-    ctx.fillStyle = isDisabled ? "#777" : "#fff";
+    if (isDisabled) ctx.fillStyle = "#777";
+    else if (isLocked || isCursor) ctx.fillStyle = "#ff0";
+    else ctx.fillStyle = "#fff";
+
     ctx.fillText(a, bx + 4, by + Math.floor(buttonH * 0.65));
   });
 }
@@ -303,15 +318,16 @@ export function drawItemMenuLikeCommandRow(ctx, {
     const idx = pageStart + slot;
     const hasItem = idx < state.inventory.length;
     const isSelected = hasItem && idx === state.itemIndex && state.phase === "player";
+    const isHover = hover?.kind === "itemSlot" && hover?.index === slot;
 
     if (isSelected) {
-      ctx.fillStyle = "#444";
+      // ✅ Updated highlight style: black bg + yellow border
+      ctx.fillStyle = "#000";
       ctx.fillRect(bx, by, buttonW, buttonH);
       ctx.strokeStyle = "#ff0";
     } else {
       ctx.fillStyle = "#000";
       ctx.fillRect(bx, by, buttonW, buttonH);
-      const isHover = hover?.kind === "itemSlot" && hover?.index === slot;
       if (isHover && hasItem) ctx.strokeStyle = "#ff0";
       else ctx.strokeStyle = hasItem ? "#fff" : "#555";
     }
@@ -327,7 +343,8 @@ export function drawItemMenuLikeCommandRow(ctx, {
     const line2 = `x${entry.count}`;
 
     ctx.font = "8px monospace";
-    ctx.fillStyle = "#fff";
+    // ✅ Selected item text becomes yellow; others remain white (old behavior)
+    ctx.fillStyle = isSelected ? "#ff0" : "#fff";
     drawTwoLineButtonTextAdaptive(ctx, line1, line2, bx, by, buttonW, buttonH);
   }
 }
@@ -371,17 +388,18 @@ export function drawSpecialMenu(ctx, {
     const bx = getRowButtonX(BATTLE_LAYOUT, i, buttonW);
     const by = uiBaseY;
     const isSelected = i === state.specialIndex;
+    const isHover = hover?.kind === "specialSlot" && hover?.index === i;
 
     const ready = !!sp.ready;
 
     if (isSelected && state.phase === "player") {
-      ctx.fillStyle = ready ? "#444" : "#222";
+      // ✅ Updated highlight style: black bg + yellow border (even if not ready)
+      ctx.fillStyle = "#000";
       ctx.fillRect(bx, by, buttonW, buttonH);
       ctx.strokeStyle = "#ff0";
     } else {
       ctx.fillStyle = "#000";
       ctx.fillRect(bx, by, buttonW, buttonH);
-      const isHover = hover?.kind === "specialSlot" && hover?.index === i;
       if (isHover && ready) ctx.strokeStyle = "#ff0";
       else ctx.strokeStyle = ready ? "#fff" : "#555";
     }
@@ -389,7 +407,9 @@ export function drawSpecialMenu(ctx, {
     ctx.strokeRect(bx, by, buttonW, buttonH);
 
     ctx.font = "8px monospace";
-    ctx.fillStyle = ready ? "#fff" : "#777";
+    // ✅ Selected special text becomes yellow (matches command highlight)
+    if (isSelected && state.phase === "player") ctx.fillStyle = "#ff0";
+    else ctx.fillStyle = ready ? "#fff" : "#777";
 
     const maxTextW = buttonW - 8;
     const [l1, l2] = wrapToTwoLinesFn(ctx, sp.name || "Special", maxTextW);
