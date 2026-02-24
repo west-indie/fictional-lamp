@@ -22,6 +22,7 @@
 // Uses KeyboardEvent.code for action bindings and KeyboardEvent.key for characters.
 
 import { armAudio, playUIMoveBlip, playUIConfirmBlip, playUIBackBlip } from "../sfx/uiSfx.js";
+import { GameState } from "./GameState.js";
 
 // ---------------------------
 // Action bindings (edit here)
@@ -46,6 +47,7 @@ const BINDINGS = {
 const MOVE_ACTIONS = new Set(["Up", "Down", "Left", "Right"]);
 const CONFIRM_ACTIONS = new Set(["Confirm"]);
 const BACK_ACTIONS = new Set(["Back"]);
+const SUPPRESS_GLOBAL_BLIP_SCREENS = new Set(["startingItemsPick"]);
 
 // Helpful for preventing browser behaviors
 const PREVENT_DEFAULT_CODES = new Set(["Backspace", "Space"]);
@@ -107,12 +109,18 @@ function isTypedChar(key) {
 export const Input = {
   // key states by code (physical keys)
   keys: {},
+  // raw physical key state (never touched by consume)
+  physicalKeys: {},
 
   // action states (derived from codes)
   actions: {},
+  // raw physical action state (never touched by consume)
+  physicalActions: {},
 
   // character "down" states by e.key lowercased ("a","d","i", etc.)
   charKeys: {},
+  // raw physical character state (never touched by consume)
+  physicalCharKeys: {},
 
   // ✅ NEW: typed character FIFO queue (for unlockTriggers)
   _typedQueue: [],
@@ -126,6 +134,7 @@ export const Input = {
     // Initialize action storage
     for (const action of Object.keys(BINDINGS)) {
       this.actions[action] = false;
+      this.physicalActions[action] = false;
     }
 
     window.addEventListener("keydown", (e) => {
@@ -136,11 +145,13 @@ export const Input = {
 
       const wasDown = !!this.keys[code];
       this.keys[code] = true;
+      this.physicalKeys[code] = true;
 
       // Track characters (for unlock codes) using e.key
       if (isTypedChar(key)) {
         const ch = key.toLowerCase();
         this.charKeys[ch] = true;
+        this.physicalCharKeys[ch] = true;
 
         // Only queue on NEW PRESS of the physical key (prevents repeats while held)
         if (!wasDown) {
@@ -154,11 +165,14 @@ export const Input = {
       const mappedActions = CODE_TO_ACTIONS.get(code) || [];
       for (const action of mappedActions) {
         this.actions[action] = true;
+        this.physicalActions[action] = true;
       }
 
       // Only on a "new press"
       if (!wasDown) {
         armAudio();
+
+        if (SUPPRESS_GLOBAL_BLIP_SCREENS.has(String(GameState.currentScreen || ""))) return;
 
         // Priority: Back > Confirm > Move
         if (mappedActions.some((a) => BACK_ACTIONS.has(a))) {
@@ -176,10 +190,13 @@ export const Input = {
       const key = e.key;
 
       this.keys[code] = false;
+      this.physicalKeys[code] = false;
 
       // Release character state
       if (isTypedChar(key)) {
-        this.charKeys[key.toLowerCase()] = false;
+        const ch = key.toLowerCase();
+        this.charKeys[ch] = false;
+        this.physicalCharKeys[ch] = false;
       }
 
       // Recompute mapped actions based on all bound codes for each action
@@ -187,6 +204,7 @@ export const Input = {
       for (const action of mappedActions) {
         const codes = BINDINGS[action] || [];
         this.actions[action] = codes.some((c) => !!this.keys[c]);
+        this.physicalActions[action] = codes.some((c) => !!this.physicalKeys[c]);
       }
     });
   },
@@ -207,6 +225,15 @@ export const Input = {
   // Backwards-compatible naming: pressed() means "is down"
   pressed(name) {
     return this.isDown(name);
+  },
+
+  // Raw physical state: unaffected by consume(), cleared only on keyup.
+  isPhysicallyDown(name) {
+    const resolved = resolveNameToKind(name);
+
+    if (resolved.kind === "action") return !!this.physicalActions[resolved.value];
+    if (resolved.kind === "char") return !!this.physicalCharKeys[resolved.value];
+    return !!this.physicalKeys[resolved.value];
   },
 
   // ✅ NEW: typed character stream (used by unlockTriggers)
@@ -251,12 +278,16 @@ export const Input = {
 
   clearAll() {
     this.keys = {};
+    this.physicalKeys = {};
     this.actions = {};
+    this.physicalActions = {};
     this.charKeys = {};
+    this.physicalCharKeys = {};
     this._typedQueue = [];
 
     for (const action of Object.keys(BINDINGS)) {
       this.actions[action] = false;
+      this.physicalActions[action] = false;
     }
   }
 };

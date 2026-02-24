@@ -3,6 +3,20 @@
 // Input dispatcher utilities for Select.
 // These functions mutate the passed-in `state` and return `true` when handled.
 
+function isPickSlotMode(state) {
+  return !!(state?.search?.pickSlotMode || state?.pickSlotMode);
+}
+
+function clearPickSlotMode(state) {
+  if (!state) return;
+  if (state.search && typeof state.search === "object") {
+    state.search.pickSlotMode = false;
+    state.search.pickedBaseIndex = -1;
+  }
+  state.pickSlotMode = false;
+  state.pickSlotMovieId = null;
+}
+
 export function detectKeyboardInput(Input, mouse, prevInputMode) {
   if (
     Input.pressed("Left") ||
@@ -77,7 +91,7 @@ export function handlePointerHover({
   if (inConfirm) return nextCorner !== null;
 
   // If in pick-slot mode, keep focus on movies and don't change it via hover
-  if (state.pickSlotMode) return nextCorner !== null;
+  if (isPickSlotMode(state)) return nextCorner !== null;
 
   // --- Search hover ---
   const sr = searchRects();
@@ -254,9 +268,8 @@ export function handleGlobalHotkeys({
     playUIBackBlip();
 
     // If we are in pick-slot mode, Back cancels that instead of leaving screen
-    if (state.pickSlotMode) {
-      state.pickSlotMode = false;
-      state.pickSlotMovieId = null;
+    if (isPickSlotMode(state)) {
+      clearPickSlotMode(state);
       persist();
       return true;
     }
@@ -279,7 +292,7 @@ export function handleToggleFocus({ Input, state, persist, playUIMoveBlip }) {
   Input.consume("Toggle");
 
   // Don't toggle focus during pick-slot mode
-  if (state.pickSlotMode) return true;
+  if (isPickSlotMode(state)) return true;
 
   state.confirmPending = false;
 
@@ -303,7 +316,7 @@ export function handleRandomizeActions({
   playUIMoveBlip
 }) {
   // Block randomize while in pick-slot mode
-  if (state.pickSlotMode) return false;
+  if (isPickSlotMode(state)) return false;
 
   if (Input.pressed("Randomize")) {
     Input.consume("Randomize");
@@ -360,7 +373,7 @@ export function handleConfirmPressed({
   if (!(state.inputMode === "keyboard" && state.enterArmed && Input.pressed("Confirm"))) return false;
 
   // If pick-slot mode is active, Enter does nothing (must click a slot or press Back/Esc)
-  if (state.pickSlotMode) {
+  if (isPickSlotMode(state)) {
     Input.consume("Confirm");
     playUIBackBlip();
     return true;
@@ -416,7 +429,7 @@ export function handleKeyboardNavigation({
   if (state.inputMode !== "keyboard") return false;
 
   // Block slot/archetype navigation while in pick-slot mode
-  if (state.pickSlotMode) return false;
+  if (isPickSlotMode(state)) return false;
 
   if (state.focus === "movies") {
     if (Input.pressed("Left")) {
@@ -545,10 +558,9 @@ export function handlePointerInput({
     }
 
     // If pick-slot mode, Back/Cancel via home click
-    if (state.pickSlotMode) {
+    if (isPickSlotMode(state)) {
       playUIBackBlip();
-      state.pickSlotMode = false;
-      state.pickSlotMovieId = null;
+      clearPickSlotMode(state);
       persist();
       return true;
     }
@@ -561,7 +573,7 @@ export function handlePointerInput({
   if (state.confirmPending) return true;
 
   // Battle corner triggers confirm pending (disabled during pick-slot mode)
-  if (!state.pickSlotMode && pointInRect(mx, my, battleCornerRect())) {
+  if (!isPickSlotMode(state) && pointInRect(mx, my, battleCornerRect())) {
     state.confirmPending = true;
     persist();
     playUIConfirmBlip();
@@ -589,7 +601,7 @@ export function handlePointerInput({
   }
 
   // --- NEW: Pick-slot mode click assigns movie to slot ---
-  if (state.pickSlotMode) {
+  if (isPickSlotMode(state)) {
     for (let i = 0; i < state.SLOT_COUNT; i++) {
       if (!pointInRect(mx, my, slotBounds(i))) continue;
 
@@ -609,8 +621,7 @@ export function handlePointerInput({
       state.focus = "movies";
       state.activeSlot = i;
 
-      state.pickSlotMode = false;
-      state.pickSlotMovieId = null;
+      clearPickSlotMode(state);
 
       state.confirmPending = false;
       persist();

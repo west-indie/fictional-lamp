@@ -2,6 +2,11 @@
 // Module D: render + shared layout helpers for battle command/item/special menus.
 // Behavior is intended to match the original inline helpers in screens/battle.js.
 
+import {
+  BATTLE_MENU_LABELS,
+  buildNoSpecialsMenuLine
+} from "../battleText/engines/corePrompts.js";
+
 // ===== shared geometry =====
 const COMMAND_ASPECT_W = 11;
 const COMMAND_ASPECT_H = 5;
@@ -124,7 +129,7 @@ export function drawTopMiniButtons(
     itemSlotsPerPage
   });
 
-  drawMiniButton(ctx, backRect, "Back", hotBack);
+  drawMiniButton(ctx, backRect, BATTLE_MENU_LABELS.back, hotBack);
   drawMiniButton(ctx, rightRect, rightLabel, hotRight);
 
   return { backRect, rightRect };
@@ -254,7 +259,7 @@ export function drawConfirmMiniButtonsIfNeeded(ctx, { SCREEN, BATTLE_LAYOUT, uiB
     slotCount: actions.length,
     buttonW,
     itemSlotsPerPage,
-    rightLabel: "Confirm",
+    rightLabel: BATTLE_MENU_LABELS.confirm,
     hotBack: hover?.kind === "miniBack",
     hotRight: hover?.kind === "miniRight"
   });
@@ -275,7 +280,7 @@ export function drawPauseMiniIfNeeded(ctx, { SCREEN, BATTLE_LAYOUT, uiBaseY, act
   });
 
   const hot = hover?.kind === "pause";
-  drawMiniButton(ctx, backRect, "Pause", hot);
+  drawMiniButton(ctx, backRect, BATTLE_MENU_LABELS.pause, hot);
 }
 
 export function drawItemMenuLikeCommandRow(ctx, {
@@ -302,7 +307,7 @@ export function drawItemMenuLikeCommandRow(ctx, {
     slotCount: itemSlotsPerPage,
     buttonW,
     itemSlotsPerPage,
-    rightLabel: "Toggle",
+    rightLabel: BATTLE_MENU_LABELS.toggle,
     hotBack: hover?.kind === "miniBack",
     hotRight: hover?.kind === "miniRight"
   });
@@ -337,14 +342,30 @@ export function drawItemMenuLikeCommandRow(ctx, {
 
     const entry = state.inventory[idx];
     const def = getInventoryItemDef(entry);
+    const itemId = String(def?.id || entry?.id || "");
+    const itemCd = Math.max(0, Math.floor(Number(state?.itemCooldowns?.[itemId] || 0)));
+    const itemType = String(def?.type || "").trim().toLowerCase();
+    const sharedWeaponCd = itemType === "reusableweapon"
+      ? Math.max(0, Math.floor(Number(state?.itemCooldowns?.__weapon__ || 0)))
+      : 0;
+    const cooldownRemaining = Math.max(itemCd, sharedWeaponCd);
+    const isOnCooldown = cooldownRemaining > 0;
 
-    const label = def ? def.shortTitle || def.name : "Unknown";
-    const line1 = (label || "Item").slice(0, 14);
-    const line2 = `x${entry.count}`;
+    const label = def ? def.shortTitle || def.name : BATTLE_MENU_LABELS.unknown;
+    const line1 = (label || BATTLE_MENU_LABELS.item).slice(0, 14);
+    const line2 = isOnCooldown
+      ? `Cooldown: ${cooldownRemaining}`
+      : (itemType === "reusableweapon" ? "Active" : `x${entry.count}`);
 
     ctx.font = "8px monospace";
-    // ✅ Selected item text becomes yellow; others remain white (old behavior)
-    ctx.fillStyle = isSelected ? "#ff0" : "#fff";
+    if (isOnCooldown) {
+      ctx.strokeStyle = "#555";
+      ctx.strokeRect(bx, by, buttonW, buttonH);
+      ctx.fillStyle = "#777";
+    } else {
+      // ✅ Selected item text becomes yellow; others remain white (old behavior)
+      ctx.fillStyle = isSelected ? "#ff0" : "#fff";
+    }
     drawTwoLineButtonTextAdaptive(ctx, line1, line2, bx, by, buttonW, buttonH);
   }
 }
@@ -365,7 +386,7 @@ export function drawSpecialMenu(ctx, {
 
   if (!state.specialsList || state.specialsList.length === 0) {
     ctx.fillStyle = "#fff";
-    ctx.fillText("No specials!", BATTLE_LAYOUT.command.x, uiBaseY + 22);
+    ctx.fillText(buildNoSpecialsMenuLine(), BATTLE_LAYOUT.command.x, uiBaseY + 22);
     return;
   }
 
@@ -379,7 +400,7 @@ export function drawSpecialMenu(ctx, {
     slotCount: count,
     buttonW,
     itemSlotsPerPage,
-    rightLabel: "Toggle",
+    rightLabel: BATTLE_MENU_LABELS.toggle,
     hotBack: hover?.kind === "miniBack",
     hotRight: hover?.kind === "miniRight"
   });
@@ -412,7 +433,7 @@ export function drawSpecialMenu(ctx, {
     else ctx.fillStyle = ready ? "#fff" : "#777";
 
     const maxTextW = buttonW - 8;
-    const [l1, l2] = wrapToTwoLinesFn(ctx, sp.name || "Special", maxTextW);
+    const [l1, l2] = wrapToTwoLinesFn(ctx, sp.name || BATTLE_MENU_LABELS.special, maxTextW);
     drawTwoLineButtonTextAdaptive(ctx, l1, l2, bx, by, buttonW, buttonH);
   });
 

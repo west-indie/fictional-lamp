@@ -10,6 +10,7 @@ import { BattleScreen } from "./screens/battle.js";
 import { LevelIntroScreen } from "./screens/levelIntro.js";
 import { FirstPickScreen } from "./screens/firstPick.js";
 import { FourthPickScreen } from "./screens/fourthPick.js";
+import { StartingItemsPickScreen } from "./screens/startingItemsPick.js";
 import { QuickplayScreen } from "./screens/quickplay.js";
 import { EnemyIntroScreen } from "./screens/enemyIntro.js";
 
@@ -20,6 +21,7 @@ import { updateCurrentScreen, renderCurrentScreen } from "./core/Renderer.js";
 
 import { ensureUnlockState } from "./systems/unlockSystem.js";
 import { runUnlockTriggers } from "./systems/unlockTriggers.js";
+import { ConfirmHold } from "./systems/confirmHoldEngine.js";
 import { Input } from "./ui.js";
 
 // ✅ Uniform audio sync on screen transitions (autoplay-safe)
@@ -29,6 +31,7 @@ export { GameState };
 
 // ✅ One-time unlock init (loads localStorage into GameState.unlocks)
 ensureUnlockState(GameState);
+ConfirmHold.init();
 
 const screens = {
   boot: BootScreen,
@@ -38,6 +41,7 @@ const screens = {
   levelIntro: LevelIntroScreen,
   firstPick: FirstPickScreen,
   fourthPick: FourthPickScreen,
+  startingItemsPick: StartingItemsPickScreen,
   battle: BattleScreen,
   quickplay: QuickplayScreen,
   enemyIntro: EnemyIntroScreen,
@@ -78,6 +82,8 @@ export function changeScreen(name) {
 }
 
 export function update(mouse) {
+  ConfirmHold.update();
+
   // ✅ Global unlock checks first (so screens can react the same frame if they want)
   runUnlockTriggers(GameState, Input);
 

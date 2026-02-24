@@ -5,6 +5,7 @@ import { SCREEN, LEGACY_320, INTRO_LAYOUT } from "../layout.js";
 import { Input } from "../ui.js";
 import { enemies } from "../data/enemies.js";
 import { movies } from "../data/movies.js"; // ✅ needed for Dev preset party resolution
+import { playUIConfirmBlip } from "../sfx/uiSfx.js";
 
 // ID-based pools
 const levelEnemyPools = {
@@ -117,7 +118,7 @@ export const LevelIntroScreen = {
 
   update(mouse) {
     // Arm Enter only after it is released on this screen
-    if (!Input.isDown("Enter")) {
+    if (!Input.isPhysicallyDown("Enter")) {
       enterArmed = true;
     }
 
@@ -135,6 +136,7 @@ export const LevelIntroScreen = {
       if (enterArmed) {
         enterArmed = false;
         GameState.enemy = null;
+        playUIConfirmBlip();
 
         if (GameState.currentLevel === 1 && !GameState.campaign.onefourShown) {
           changeScreen("firstPick");
@@ -150,6 +152,7 @@ export const LevelIntroScreen = {
       enterArmed = false;
 
       GameState.enemy = null;
+      playUIConfirmBlip();
 
       if (GameState.currentLevel === 1 && !GameState.campaign.onefourShown) {
         changeScreen("firstPick");
@@ -196,3 +199,6 @@ export const LevelIntroScreen = {
     ctx.restore();
   }
 };
+
+
+

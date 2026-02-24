@@ -691,6 +691,13 @@ export const SelectScreen = {
       if (Input.pressed("Back")) Input.consume("Back");
       if (Input.pressed("Confirm")) Input.consume("Confirm");
       if (Input.pressed("Toggle")) Input.consume("Toggle");
+      if (Input.pressed("Randomize")) Input.consume("Randomize");
+      if (Input.pressed("GenreRandomize")) Input.consume("GenreRandomize");
+      if (Input.pressed("Clear")) Input.consume("Clear");
+      if (Input.pressed("Left")) Input.consume("Left");
+      if (Input.pressed("Right")) Input.consume("Right");
+      if (Input.pressed("Up")) Input.consume("Up");
+      if (Input.pressed("Down")) Input.consume("Down");
     }
 
     if (!Input.pressed("Randomize") && shouldResetStreakThisFrame(Input, mouse, state.confirmPending)) {
@@ -737,6 +744,23 @@ export const SelectScreen = {
     let dropdownHoverBlocking = false;
     try {
       dropdownHoverBlocking = handleSearchHover({ mouse, state, SCREEN, L });
+    } catch {}
+
+    // In pick-slot mode, track which slot the pointer is over for visual targeting.
+    try {
+      ensureSearchState(state);
+      let hoverSlot = -1;
+      if (state.search?.pickSlotMode && mouse) {
+        const mx = mouse.x;
+        const my = mouse.y;
+        for (let i = 0; i < SLOT_COUNT; i++) {
+          if (pointInRect(mx, my, slotBounds({ i, SLOT_COUNT, SCREEN, L }))) {
+            hoverSlot = i;
+            break;
+          }
+        }
+      }
+      if (state.search) state.search.hoveredSlotIndex = hoverSlot;
     } catch {}
 
     // 2.5) Search pointer (dropdown clicks + pick-slot placement clicks)
@@ -1010,9 +1034,13 @@ export const SelectScreen = {
 
     // Search state (optional)
     let pickSlotMode = false;
+    let pickSlotHoverIndex = -1;
     try {
       ensureSearchState(state);
       pickSlotMode = !!state.search?.pickSlotMode;
+      pickSlotHoverIndex = Number.isFinite(Number(state.search?.hoveredSlotIndex))
+        ? Number(state.search.hoveredSlotIndex)
+        : -1;
     } catch {}
 
     // BG
@@ -1192,6 +1220,14 @@ export const SelectScreen = {
       if (pickSlotMode) {
         ctx.fillStyle = "rgba(0,0,0,0.55)";
         ctx.fillRect(card.x + 1, card.y + 1, card.w - 2, card.h - 2);
+
+        if (i === pickSlotHoverIndex) {
+          const prevLW = ctx.lineWidth;
+          ctx.strokeStyle = C().highlight || "#ff0";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(card.x + 2, card.y + 2, card.w - 4, card.h - 4);
+          ctx.lineWidth = prevLW;
+        }
       }
     }
 

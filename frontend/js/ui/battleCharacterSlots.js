@@ -110,6 +110,44 @@ export function renderBattleCharacterSlots(ctx, opts) {
 
   // ✅ Defend tint (change this to whatever color you want)
   const DEFEND_TINT = "#0ff";
+  // const DEFAULT_EFFECT_TINT = "#ff9f1c"; // Reserved for a future status/effect tint.
+  const KNOCKED_DOWN_TINT = "#7a7a7a";
+  const SHIELD_TINT = "#6cf"; // light cyan / shield accent
+  const HP_DOWN_TINT = "#ff6a6a";
+  const HP_UP_TINT = "#6cff85";
+
+  function shieldLineColorFor(member, fallback) {
+    if (member?.hp <= 0) return fallback;
+    if (member?.isMortal) return SHIELD_TINT;
+    const trend = String(member?.shieldRollTrend || "steady");
+    if (trend === "down") return HP_DOWN_TINT;
+    return SHIELD_TINT;
+  }
+
+  function hpLineColorFor(member, fallback) {
+    // Knocked-down state owns the full slot color; suppress roll tints.
+    if (member?.hp <= 0) return fallback;
+
+    // Mortal state owns the full slot color; suppress extra HP roll tint.
+    if (member?.isMortal) return fallback;
+
+    // Priority: while shield is draining, keep HP tint neutral until shield depletion resolves.
+    if (String(member?.shieldRollTrend || "steady") === "down") return fallback;
+
+    const trend = String(member?.hpRollTrend || "steady");
+    if (trend === "down") return HP_DOWN_TINT;
+    if (trend === "up") return HP_UP_TINT;
+    return fallback;
+  }
+
+  function statLineColorFor(member, fallback, trendKey) {
+    if (member?.hp <= 0) return fallback;
+    if (member?.isMortal) return fallback;
+    const trend = String(member?.[trendKey] || "steady");
+    if (trend === "down") return HP_DOWN_TINT;
+    if (trend === "up") return HP_UP_TINT;
+    return fallback;
+  }
 
   state.party.forEach((member, i) => {
     if (!member) return;
@@ -140,13 +178,18 @@ export function renderBattleCharacterSlots(ctx, opts) {
     lines.push(t1);
     if (t2) lines.push(t2); // only adds line 2 if it exists
 
-    lines.push(`HP:${member.hp}`);
+    // Keep HP format exactly, just add shield inline (no extra line)
+    const hpLine =
+      member.tempShield > 0
+        ? `HP:${member.hp} +${member.tempShield}`
+        : `HP:${member.hp}`;
+
+    lines.push(hpLine);
     lines.push(`ATK:${member.atk}`);
     lines.push(`DEF:${member.def}`);
 
-    // If you still want SHD/DEFEND, it becomes a 6th line.
-    // If you truly want max 5 lines always, delete this block.
-    if (member.tempShield > 0) lines.push(`SHD: ${member.tempShield}`);
+    // ✅ No separate SHD line (prevents crowding)
+
     // ✅ Removed "DEFEND" text line entirely; defend now shows via tint instead.
 
     // ✅ Center the text block vertically relative to the poster
@@ -160,8 +203,15 @@ export function renderBattleCharacterSlots(ctx, opts) {
       ctx.fillText("▼", x + Math.floor(slotW / 2) - 3, posterY - 2);
     }
 
-    // ✅ Choose slot UI color (white normally, tinted while defending)
-    const slotUI = member.isDefending ? DEFEND_TINT : "#fff";
+    // ✅ Slot UI color priority: knocked-down > mortal > defend > normal
+    const slotUI =
+      member.hp <= 0
+        ? KNOCKED_DOWN_TINT
+        : (member.isMortal ? HP_DOWN_TINT : (member.isDefending ? DEFEND_TINT : "#fff"));
+    const hpUI = hpLineColorFor(member, slotUI);
+    const shieldUI = shieldLineColorFor(member, slotUI);
+    const atkUI = statLineColorFor(member, slotUI, "atkRollTrend");
+    const defUI = statLineColorFor(member, slotUI, "defRollTrend");
 
     // Poster box
     ctx.strokeStyle = slotUI;
@@ -179,9 +229,32 @@ export function renderBattleCharacterSlots(ctx, opts) {
     }
 
     // Draw text lines
-    ctx.fillStyle = slotUI;
     for (let li = 0; li < lines.length; li++) {
-      ctx.fillText(lines[li], textX, textStartY + li * LINE_H);
+      const yLine = textStartY + li * LINE_H;
+      const line = lines[li];
+
+      // Special-case HP line with shield: color only the +shield
+      if (line.startsWith("HP:") && member.tempShield > 0 && line.includes("+")) {
+        const [hpPart, shieldPart] = line.split("+");
+
+        // Draw HP portion (roll tint if active, else defend/default tint)
+        ctx.fillStyle = hpUI;
+        ctx.fillText(hpPart, textX, yLine);
+
+        // Measure width so shield starts exactly after HP text
+        const hpWidth = ctx.measureText(hpPart).width;
+
+        // Draw shield portion (cyan)
+        ctx.fillStyle = shieldUI;
+        ctx.fillText("+" + shieldPart, textX + hpWidth, yLine);
+      } else {
+        // Normal line
+        if (line.startsWith("HP:")) ctx.fillStyle = hpUI;
+        else if (line.startsWith("ATK:")) ctx.fillStyle = atkUI;
+        else if (line.startsWith("DEF:")) ctx.fillStyle = defUI;
+        else ctx.fillStyle = slotUI;
+        ctx.fillText(line, textX, yLine);
+      }
     }
   });
 
@@ -200,6 +273,10 @@ export function renderBattleCharacterSlots(ctx, opts) {
     ctx.fillText(state.enemy.name, BATTLE_LAYOUT.enemy.x + 10, BATTLE_LAYOUT.enemy.y + 15);
 
     ctx.font = "10px monospace";
+    const enemyHpTrend = String(state.enemy.hpRollTrend || "steady");
+    const enemyHpColor =
+      enemyHpTrend === "down" ? HP_DOWN_TINT : enemyHpTrend === "up" ? HP_UP_TINT : "#fff";
+    ctx.fillStyle = enemyHpColor;
     ctx.fillText(
       `HP: ${state.enemy.hp}/${state.enemy.maxHP}`,
       BATTLE_LAYOUT.enemy.x + 10,

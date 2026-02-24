@@ -5,3 +5,4 @@
 // The real implementation now lives in core/InputManager.js.
 
 export { Input } from "./core/InputManager.js";
+export { ConfirmHold } from "./systems/confirmHoldEngine.js";
