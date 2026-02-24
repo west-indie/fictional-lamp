@@ -13,8 +13,8 @@
 //
 // Keeps your existing return shapes, but adds absorbedShield for debugging.
 
-const PLAYER_ATK_MULT = 2.2;
-const ENEMY_ATK_MULT = 1;
+export const PLAYER_ATK_MULT = 1.8;
+const ENEMY_ATK_MULT = 1.2;
 const ENEMY_DEF_MULT = 1;
 
 function clamp(value, min, max) {
@@ -34,11 +34,30 @@ function getActivePct(obj, pctKey) {
   return Number(s[pctKey] ?? 0) || 0;
 }
 
+function getActiveTurns(obj, turnsKey) {
+  const s = obj?.statuses;
+  if (!s) return 0;
+  const t = Number(s[turnsKey] ?? 0) || 0;
+  return Math.max(0, Math.floor(t));
+}
+
 function getEffectiveAtk(attacker) {
   const base = Number(attacker?.atk ?? 0) || 0;
   const up = clamp(getActivePct(attacker, "atkBuffPct"), 0, 5);
   const down = clamp(getActivePct(attacker, "atkDebuffPct"), 0, 0.95);
   return Math.max(0, Math.round(base * (1 + up) * (1 - down)));
+}
+
+function getEffectiveCritChance(attacker) {
+  const base = Math.max(0, Number(attacker?.critChance ?? 0) || 0);
+  const up = Math.max(0, getActivePct(attacker, "critChanceBuffPct"));
+  return clamp(base + up, 0, 0.95);
+}
+
+function getEffectiveCritDamageBonus(attacker) {
+  const base = Math.max(0, Number(attacker?.critDamageBonus ?? 0) || 0);
+  const up = Math.max(0, getActivePct(attacker, "critDamageBuffPct"));
+  return Math.max(0, base + up);
 }
 
 function getEffectiveDef(target) {
@@ -67,7 +86,6 @@ function applyShield(target, dmg) {
   const absorbed = Math.min(shield, dmg);
   target.tempShield = shield - absorbed;
 
-  // If shield hits 0, let duration naturally expire elsewhere (or you can zero it here)
   return { remaining: dmg - absorbed, absorbed };
 }
 
@@ -97,17 +115,15 @@ function consumeNextHitVulnIfAny(enemy, dmg) {
 }
 
 /**
- * Player → Enemy basic attack.
- *
- * attacker: { atk, critChance, statuses? }
- * enemy:    { hp, maxHP, defense/def, statuses? }
+ * Player â†’ Enemy basic attack.
  */
 export function computePlayerAttack(attacker, enemy) {
   let attackPower = Math.round(getEffectiveAtk(attacker) * PLAYER_ATK_MULT);
   let isCrit = false;
 
-  if (Math.random() < (attacker.critChance || 0)) {
-    attackPower = Math.round(attackPower * 1.5);
+  if (Math.random() < getEffectiveCritChance(attacker)) {
+    const critMult = 1.5 + getEffectiveCritDamageBonus(attacker);
+    attackPower = Math.round(attackPower * critMult);
     isCrit = true;
   }
 
@@ -130,13 +146,10 @@ export function computePlayerAttack(attacker, enemy) {
 }
 
 /**
- * Enemy → Player basic attack.
- *
- * enemy:  { attack, critChance, statuses? }  (attack is already modified by enemyTurnSystem move mult)
- * target: { def, hp, maxHp, isDefending, statuses?, tempShield? }
+ * Enemy â†’ Player basic attack.
  */
 export function computeEnemyAttack(enemy, target) {
-  const enemyAtk = Math.round(Number(enemy?.attack ?? 0) || 0) * ENEMY_ATK_MULT;
+  const enemyAtk = Math.round((Number(enemy?.attack ?? 0) || 0) * ENEMY_ATK_MULT);
   const targetDef = getEffectiveDef(target);
 
   let baseDamage = enemyAtk - targetDef;
@@ -144,7 +157,8 @@ export function computeEnemyAttack(enemy, target) {
 
   // Defend halves incoming damage (your existing behavior)
   if (target.isDefending) {
-    baseDamage = Math.floor(baseDamage * 0.5);
+    const defendMult = Math.max(0.2, Math.min(0.9, Number(target.defendDamageMult || 0.5)));
+    baseDamage = Math.floor(baseDamage * defendMult);
   }
 
   if (Math.random() < (enemy.critChance || 0)) {
@@ -152,7 +166,15 @@ export function computeEnemyAttack(enemy, target) {
     isCrit = true;
   }
 
-  let damage = Math.max(1, baseDamage);
+  // Prevent extreme DEF stacking from reducing enemy hits to perpetual chip.
+  const minDamageFloor = Math.max(1, Math.ceil(enemyAtk * 0.15));
+  let damage = Math.max(minDamageFloor, baseDamage);
+
+  // âœ… DAZED: softer control â€” reduced hit (miss chance is handled in enemyTurnSystem)
+  const dazedTurns = getActiveTurns(enemy, "dazedTurns");
+  if (dazedTurns > 0) {
+    damage = Math.max(1, Math.round(damage * 0.75)); // tuneable: 0.75 = 25% weaker hit
+  }
 
   // Team damage reduction (Animation, etc.)
   damage = applyDamageReduction(target, damage);
@@ -175,11 +197,6 @@ export function computeEnemyAttack(enemy, target) {
   };
 }
 
-/**
- * Apply raw damage to a target-like object.
- * Mutates target.hp and returns the actual damage dealt to HP.
- * (Does not apply shield/reduction; use computeEnemyAttack for that.)
- */
 export function applyDamage(target, amount) {
   const before = target.hp;
   const after = clamp(before - amount, 0, target.maxHp ?? before);
@@ -187,13 +204,10 @@ export function applyDamage(target, amount) {
   return before - after;
 }
 
-/**
- * Apply healing to a target-like object.
- * Mutates target.hp and returns the actual amount healed.
- */
 export function applyHeal(target, amount) {
   const before = target.hp;
   const after = clamp(before + amount, 0, target.maxHp ?? before);
   target.hp = after;
   return after - before;
 }
+

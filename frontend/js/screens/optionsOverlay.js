@@ -28,6 +28,7 @@
 //    and within a slider block: label and slider are close, not separated by a full rowGap
 
 import { SCREEN } from "../layout.js";
+import { getGenreColor } from "../ui/genreStyle.js";
 
 // LocalStorage keys (NEW — 0..7)
 const LS_MUSIC_LVL = "LS_OPTIONS_MUSIC_LEVEL_0_7";
@@ -161,6 +162,60 @@ function measureText(ctx, text, font) {
   return w;
 }
 
+function fitTextWithEllipsis(ctx, text, maxW) {
+  const raw = String(text || "");
+  if (maxW <= 0) return "";
+  if (ctx.measureText(raw).width <= maxW) return raw;
+  const ellipsis = "...";
+  const ellipsisW = ctx.measureText(ellipsis).width;
+  if (ellipsisW >= maxW) return "";
+  let out = raw;
+  while (out.length > 0 && (ctx.measureText(out).width + ellipsisW) > maxW) {
+    out = out.slice(0, -1);
+  }
+  return out + ellipsis;
+}
+
+function wrapTextLines(ctx, text, maxW, maxLines = 2) {
+  const words = String(text || "").split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [""];
+  const out = [];
+  let line = "";
+  for (let i = 0; i < words.length; i++) {
+    const candidate = line ? `${line} ${words[i]}` : words[i];
+    if (ctx.measureText(candidate).width <= maxW) {
+      line = candidate;
+      continue;
+    }
+    if (line) out.push(line);
+    line = words[i];
+    if (out.length >= maxLines - 1) break;
+  }
+  if (out.length < maxLines && line) out.push(line);
+  if (out.length > maxLines) out.length = maxLines;
+  if (out.length === maxLines) {
+    const consumed = out.join(" ").split(/\s+/).filter(Boolean).length;
+    if (consumed < words.length) {
+      out[maxLines - 1] = fitTextWithEllipsis(ctx, out[maxLines - 1], maxW);
+    }
+  }
+  return out;
+}
+
+function normalizeGenre(value) {
+  const g = String(value || "").trim().toUpperCase();
+  if (!g || g === "NONE" || g === "NULL" || g === "UNSET") return "";
+  return g;
+}
+
+function isBattleInfoCard(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value) && "title" in value && "level" in value;
+}
+
+const BATTLE_INFO_CARD_H = 72;
+const BATTLE_INFO_BLOCK_H = 94;
+const BATTLE_INFO_TO_MENU_GAP = -16;
+
 export function createOptionsOverlay({
   width = SCREEN.W,
   height = SCREEN.H,
@@ -170,6 +225,7 @@ export function createOptionsOverlay({
   onReset = null,
   onSetMusicGain = null, // 0..1
   onSetSfxGain = null, // 0..1
+  getBattleInfoLines = null,
 
   // initial gains (optional)
   initialMusicGain01 = null,
@@ -178,7 +234,11 @@ export function createOptionsOverlay({
   migrateOldLevelIfNeeded(LS_MUSIC_LVL, OLD_LS_MUSIC_LVL);
   migrateOldLevelIfNeeded(LS_SFX_LVL, OLD_LS_SFX_LVL);
 
-  const PANEL = { w: 270, h: 165 };
+  function getPanelDims() {
+    return state.context === "battle"
+      ? { w: 340, h: 290 }
+      : { w: 270, h: 165 };
+  }
 
   const FONT_TITLE_PINNED = "15px monospace";
   const FONT_ITEM = "10px monospace";
@@ -258,7 +318,7 @@ export function createOptionsOverlay({
   }
 
   function computeItemHitLayout(ctx, items) {
-    const PANEL = { w: 270, h: 165 };
+    const PANEL = getPanelDims();
     const INNER = { rowGap: 8, sliderW: 140, sliderH: 10 };
 
     const rowH = 12;
@@ -270,7 +330,17 @@ export function createOptionsOverlay({
 
     const blocks = items.map((it) => (it.type === "slider" ? sliderBlockH : rowH));
     const totalH = blocks.reduce((a, b) => a + b, 0) + (items.length - 1) * INNER.rowGap;
-    const startY = py + Math.floor((PANEL.h - totalH) / 2) + 4;
+    const infoLines = state.context === "battle" && typeof getBattleInfoLines === "function"
+      ? (getBattleInfoLines() || [])
+      : [];
+    const hasCards = Array.isArray(infoLines) && infoLines.some(isBattleInfoCard);
+    const infoCount = Array.isArray(infoLines) ? Math.min(infoLines.length, 6) : 0;
+    const infoBlockH = state.context === "battle"
+      ? (hasCards ? BATTLE_INFO_BLOCK_H : (8 + infoCount * 10 + 6))
+      : 0;
+    const startY = state.context === "battle"
+      ? (py + 34 + infoBlockH + BATTLE_INFO_TO_MENU_GAP)
+      : (py + Math.floor((PANEL.h - totalH) / 2) + 4);
 
     const centerX = px + Math.floor(PANEL.w / 2);
     const sliderX = centerX - Math.floor(INNER.sliderW / 2);
@@ -470,6 +540,7 @@ export function createOptionsOverlay({
     ctx.fillStyle = "rgba(0,0,0,0.75)";
     ctx.fillRect(0, 0, width, height);
 
+    const PANEL = getPanelDims();
     const px = Math.floor((width - PANEL.w) / 2);
     const py = Math.floor((height - PANEL.h) / 2);
 
@@ -495,8 +566,17 @@ export function createOptionsOverlay({
     const blocks = items.map((it) => (it.type === "slider" ? sliderBlockH : rowH));
     const totalH =
       blocks.reduce((a, b) => a + b, 0) + (items.length - 1) * INNER.rowGap;
-
-    const startY = py + Math.floor((PANEL.h - totalH) / 2) + 4;
+    const infoLines = state.context === "battle" && typeof getBattleInfoLines === "function"
+      ? (getBattleInfoLines() || [])
+      : [];
+    const hasCards = Array.isArray(infoLines) && infoLines.some(isBattleInfoCard);
+    const infoCount = Array.isArray(infoLines) ? Math.min(infoLines.length, 6) : 0;
+    const infoBlockH = state.context === "battle"
+      ? (hasCards ? BATTLE_INFO_BLOCK_H : (8 + infoCount * 10 + 6))
+      : 0;
+    const startY = state.context === "battle"
+      ? (py + 34 + infoBlockH + BATTLE_INFO_TO_MENU_GAP)
+      : (py + Math.floor((PANEL.h - totalH) / 2) + 4);
 
     // Anchor X
     const centerX = px + Math.floor(PANEL.w / 2);
@@ -534,6 +614,86 @@ export function createOptionsOverlay({
         cy += sliderBlockH;
         if (!isLast) cy += INNER.rowGap;
         continue;
+      }
+    }
+
+    // Battle-only progression block (above Continue).
+    if (state.context === "battle" && Array.isArray(infoLines) && infoLines.length > 0) {
+      const cards = infoLines.filter(isBattleInfoCard).slice(0, 4);
+      if (cards.length > 0) {
+        const infoX = px + 12;
+        const infoY = py + 34;
+        const infoW = PANEL.w - 24;
+        const gap = 4;
+        const cardW = Math.floor((infoW - (gap * 3)) / 4);
+        const cardH = BATTLE_INFO_CARD_H;
+
+        for (let i = 0; i < cards.length; i++) {
+          const c = cards[i] || {};
+          const x = infoX + (i * (cardW + gap));
+          const y = infoY;
+          const title = String(c.title || `Slot ${i + 1}`);
+          const primary = normalizeGenre(c.primaryGenre || "UNKNOWN") || "UNKNOWN";
+          const secondary = normalizeGenre(c.secondaryGenre || "");
+          const level = Math.max(1, Math.floor(Number(c.level || 1)));
+          const xp = Math.max(0, Math.floor(Number(c.xp || 0)));
+          const nextNeed = Math.max(0, Math.floor(Number(c.nextNeed || 0)));
+
+          ctx.strokeStyle = "#3a3a3a";
+          ctx.strokeRect(x, y, cardW, cardH);
+
+          const cx = x + Math.floor(cardW / 2);
+          const maxLineW = cardW - 8;
+
+          ctx.font = "8px monospace";
+          ctx.fillStyle = "#fff";
+          const titleLines = wrapTextLines(ctx, title, maxLineW, 2);
+          ctx.fillText(titleLines[0] || "", cx - (ctx.measureText(titleLines[0] || "").width / 2), y + 12);
+          ctx.fillText(titleLines[1] || "", cx - (ctx.measureText(titleLines[1] || "").width / 2), y + 22);
+
+          ctx.font = "8px monospace";
+          const genreLine1Y = y + 31;
+          const genreLine2Y = y + 39;
+          if (secondary) {
+            const pLine = fitTextWithEllipsis(ctx, primary, maxLineW);
+            const sLine = fitTextWithEllipsis(ctx, secondary, maxLineW);
+            ctx.fillStyle = getGenreColor(primary);
+            ctx.fillText(pLine, cx - (ctx.measureText(pLine).width / 2), genreLine1Y);
+            ctx.fillStyle = getGenreColor(secondary);
+            ctx.fillText(sLine, cx - (ctx.measureText(sLine).width / 2), genreLine2Y);
+          } else {
+            const pLine = fitTextWithEllipsis(ctx, primary, maxLineW);
+            const singleGenreY = Math.round((genreLine1Y + genreLine2Y) / 2);
+            ctx.fillStyle = getGenreColor(primary);
+            ctx.fillText(pLine, cx - (ctx.measureText(pLine).width / 2), singleGenreY);
+          }
+
+          ctx.font = "8px monospace";
+          ctx.fillStyle = "#fff";
+          const levelLine = `Level ${level} | XP: ${xp}`;
+          ctx.fillText(levelLine, cx - (ctx.measureText(levelLine).width / 2), y + 49);
+
+          ctx.font = "8px monospace";
+          const needLines = wrapTextLines(ctx, `${nextNeed} XP needed for next level`, maxLineW, 3);
+          ctx.fillText(needLines[0] || "", cx - (ctx.measureText(needLines[0] || "").width / 2), y + 58);
+          ctx.fillText(needLines[1] || "", cx - (ctx.measureText(needLines[1] || "").width / 2), y + 66);
+          ctx.fillText(needLines[2] || "", cx - (ctx.measureText(needLines[2] || "").width / 2), y + 74);
+        }
+      } else {
+        const infoX = px + 12;
+        const infoW = PANEL.w - 24;
+        const infoTop = py + 34;
+        const lineH = 10;
+        const drawLines = infoLines.slice(0, 6);
+
+        ctx.strokeStyle = "#3a3a3a";
+        ctx.strokeRect(infoX - 2, infoTop - 4, infoW + 4, 10 + drawLines.length * lineH);
+
+        ctx.font = FONT_HINT;
+        ctx.fillStyle = "#d5d5d5";
+        for (let i = 0; i < drawLines.length; i++) {
+          ctx.fillText(String(drawLines[i]), infoX, infoTop + (i * lineH));
+        }
       }
     }
 

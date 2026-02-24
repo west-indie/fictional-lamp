@@ -107,7 +107,12 @@ function blip({
   jitter = 60,
   duration = 0.05,
   gainPeak = 0.06,
-  type = "square"
+  type = "square",
+  endFreq = null,
+  hpFreq = null,
+  lpFreq = null,
+  boxCutFreq = null,
+  boxCutGainDb = 0
 } = {}) {
   const c = getCtx();
   if (!c) return;
@@ -119,52 +124,88 @@ function blip({
 
   const osc = c.createOscillator();
   const gain = c.createGain();
+  const t = c.currentTime;
 
   const j = (Math.random() - 0.5) * jitter;
-  osc.frequency.value = baseFreq + j;
+  const startFreq = Math.max(40, baseFreq + j);
+  osc.frequency.setValueAtTime(startFreq, t);
+  if (Number.isFinite(endFreq)) {
+    osc.frequency.exponentialRampToValueAtTime(Math.max(40, Number(endFreq)), t + duration);
+  }
   osc.type = type;
-
-  const t = c.currentTime;
 
   gain.gain.setValueAtTime(0.0001, t);
   gain.gain.exponentialRampToValueAtTime(gainPeak, t + 0.005);
   gain.gain.exponentialRampToValueAtTime(0.0001, t + duration);
 
   osc.connect(gain);
-  // ✅ route through sfx master gain
-  gain.connect(sfxGain);
+
+  let out = gain;
+
+  if (Number.isFinite(hpFreq) && Number(hpFreq) > 0) {
+    const hp = c.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.setValueAtTime(Math.max(20, Number(hpFreq)), t);
+    hp.Q.value = 0.7;
+    out.connect(hp);
+    out = hp;
+  }
+
+  if (Number.isFinite(boxCutFreq) && Number(boxCutFreq) > 0 && Number(boxCutGainDb) < 0) {
+    const cut = c.createBiquadFilter();
+    cut.type = "peaking";
+    cut.frequency.setValueAtTime(Math.max(40, Number(boxCutFreq)), t);
+    cut.Q.value = 1.0;
+    cut.gain.setValueAtTime(Number(boxCutGainDb), t);
+    out.connect(cut);
+    out = cut;
+  }
+
+  if (Number.isFinite(lpFreq) && Number(lpFreq) > 0) {
+    const lp = c.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.setValueAtTime(Math.max(120, Number(lpFreq)), t);
+    lp.Q.value = 0.6;
+    out.connect(lp);
+    out = lp;
+  }
+
+  out.connect(sfxGain);
 
   osc.start(t);
   osc.stop(t + duration + 0.01);
 }
 
-export function playUIMoveBlip() {
+export function playUIMoveBlip(overrides = {}) {
   blip({
     baseFreq: 650,
     jitter: 70,
     duration: 0.045,
     gainPeak: 0.045,
-    type: "square"
+    type: "square",
+    ...overrides
   });
 }
 
-export function playUIConfirmBlip() {
+export function playUIConfirmBlip(overrides = {}) {
   blip({
     baseFreq: 900,
     jitter: 90,
     duration: 0.055,
     gainPeak: 0.06,
-    type: "square"
+    type: "square",
+    ...overrides
   });
 }
 
-export function playUIBackBlip() {
+export function playUIBackBlip(overrides = {}) {
   blip({
     baseFreq: 380,
     jitter: 10,
     duration: 0.065,
     gainPeak: 0.05,
-    type: "square"
+    type: "square",
+    ...overrides
   });
 }
 
@@ -177,3 +218,55 @@ export function playTextBlip() {
     type: "square"
   });
 }
+
+// Boot/loading style tone used during short transition windows.
+export function playUILoadingTone(durationMs = 800) {
+  const c = getCtx();
+  if (!c) return;
+  if (c.state !== "running") return;
+
+  ensureGraph();
+  if (!sfxGain) return;
+
+  const durSec = clamp((Number(durationMs) || 800) / 1000, 0.12, 2.5);
+  const t = c.currentTime;
+
+  const osc = c.createOscillator();
+  const lfo = c.createOscillator();
+  const lfoGain = c.createGain();
+  const filter = c.createBiquadFilter();
+  const gain = c.createGain();
+
+  // Subtle computer-ish hum: smoother core wave + light modulation.
+  osc.type = "triangle";
+  osc.frequency.setValueAtTime(150, t);
+  osc.frequency.exponentialRampToValueAtTime(185, t + durSec * 0.85);
+  osc.frequency.exponentialRampToValueAtTime(175, t + durSec);
+
+  lfo.type = "triangle";
+  lfo.frequency.setValueAtTime(1.6, t);
+  lfoGain.gain.setValueAtTime(2.2, t);
+  lfo.connect(lfoGain);
+  lfoGain.connect(osc.frequency);
+
+  filter.type = "lowpass";
+  filter.frequency.setValueAtTime(560, t);
+  filter.frequency.linearRampToValueAtTime(760, t + durSec);
+  filter.Q.value = 0.45;
+
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.exponentialRampToValueAtTime(0.0045, t + 0.05);
+  gain.gain.setValueAtTime(0.0035, t + Math.max(0.05, durSec - 0.09));
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + durSec);
+
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(sfxGain);
+
+  osc.start(t);
+  lfo.start(t);
+  const stopAt = t + durSec + 0.03;
+  osc.stop(stopAt);
+  lfo.stop(stopAt);
+}
+

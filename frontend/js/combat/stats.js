@@ -32,6 +32,8 @@ const GENRE_BONUSES = {
   SCIFI:        { hp: 0,   atk: 3,  def: 1,  crit: 0.01, evade: 0.00 },
   FANTASY:      { hp: 8,   atk: 1,  def: 0,  crit: 0.00, evade: 0.00 },
   ANIMATION:    { hp: -3,  atk: 0,  def: 3,  crit: 0.00, evade: 0.02 },
+  MUSICAL:      { hp: 4,   atk: 3,  def: 1,  crit: 0.01, evade: 0.01 },
+  MYSTERY:      { hp: 2,   atk: 2,  def: 2,  crit: 0.02, evade: 0.01 },
   CRIME:        { hp: 0,   atk: 3,  def: 1,  crit: 0.03, evade: 0.00 },
   ROMANCE:      { hp: 6,   atk: 0,  def: 1,  crit: 0.00, evade: 0.01 },
   DOCUMENTARY:  { hp: 0,   atk: -2, def: 4,  crit: 0.00, evade: 0.00 }
@@ -55,7 +57,7 @@ const ERA_BONUSES = {
   CLASSIC:       { hp: 10, def: 3, atk: -1, crit: 0.00 },
   NEW_HOLLYWOOD: { hp: 7,  def: 2, atk: 2,  crit: 0.01 },
   MODERN:        { hp: 4,  def: 1, atk: 4,  crit: 0.02 },
-  CONTEMPORARY:  { hp: 0,  def: 0, atk: 7,  crit: 0.04 }
+  CONTEMPORARY:  { hp: 0,  def: 0, atk: 5,  crit: 0.04 }
 };
 
 function getMetaForMovie(movie) {
@@ -134,7 +136,7 @@ export function calculateMovieStats(movie) {
     // --- Genre bonuses (support single or dual) ---
     if (primaryGenre && GENRE_BONUSES[primaryGenre]) {
       const g = GENRE_BONUSES[primaryGenre];
-      const factor = hasSecondary ? 0.7 : 1.0; // primary: full if single, 70% if dual
+      const factor = hasSecondary ? 0.7 : 1.2; // primary: 120% if single, 70% if dual
       bonusHp    += g.hp * factor;
       bonusAtk   += g.atk * factor;
       bonusDef   += g.def * factor;

@@ -8,6 +8,7 @@ import {
   getTopMiniRects,
   pointInRect
 } from "../../ui/battleMenus.js";
+import { items } from "../../data/items.js";
 
 /**
  * Handles mouse interactions during PLAYER phase.
@@ -42,7 +43,7 @@ export function handleBattleMouse({
   let hitSomething = false;
   const uiBaseY = BATTLE_LAYOUT.command.y;
 
-  // ✅ Only gate *selection writes*; never gate hover detection
+  // ✅ Mouse can own focus only when enabled, moved, or clicked this frame.
   const canMouseDriveSelection = mouseSelectEnabled || mouse.moved || mouse.clicked;
 
   // --- confirm mode minis + command-row behavior ---
@@ -97,7 +98,7 @@ export function handleBattleMouse({
       if (pointInRect(mouse.x, mouse.y, r)) {
         hitAnyConfirmUi = true;
         hitSomething = true;
-        setHover({ kind: "action", index: i });
+        if (canMouseDriveSelection) setHover({ kind: "action", index: i });
         if (typeof mouse.setCursor === "function") mouse.setCursor("pointer");
 
         if (canMouseDriveSelection) state.actionIndex = i;
@@ -159,7 +160,7 @@ export function handleBattleMouse({
       const r = { x: bx, y: uiBaseY, w: buttonW, h: buttonH };
       if (pointInRect(mouse.x, mouse.y, r)) {
         hitSomething = true;
-        setHover({ kind: "action", index: i });
+        if (canMouseDriveSelection) setHover({ kind: "action", index: i });
         if (typeof mouse.setCursor === "function") mouse.setCursor("pointer");
 
         if (canMouseDriveSelection) state.actionIndex = i;
@@ -216,17 +217,27 @@ export function handleBattleMouse({
         const r = { x: bx, y: uiBaseY, w: buttonW, h: buttonH };
         const idx = pageStart + slot;
         const hasItem = idx < state.inventory.length;
+        const entry = hasItem ? state.inventory[idx] : null;
+        const def = entry ? items[entry.id] : null;
+        const itemId = String(def?.id || entry?.id || "");
+        const itemCd = Math.max(0, Math.floor(Number(state?.itemCooldowns?.[itemId] || 0)));
+        const itemType = String(def?.type || "").trim().toLowerCase();
+        const sharedWeaponCd = itemType === "reusableweapon"
+          ? Math.max(0, Math.floor(Number(state?.itemCooldowns?.__weapon__ || 0)))
+          : 0;
+        const cooldownRemaining = Math.max(itemCd, sharedWeaponCd);
+        const ready = cooldownRemaining <= 0;
 
         // ✅ CHANGE: hover-detect always (even empty slots) so hover ping works
         if (pointInRect(mouse.x, mouse.y, r)) {
           hitSomething = true;
-          setHover({ kind: "itemSlot", index: slot });
+          if (canMouseDriveSelection) setHover({ kind: "itemSlot", index: slot });
           if (typeof mouse.setCursor === "function") mouse.setCursor("pointer");
 
           // Only drive selection/click if there is a real item
           if (hasItem && canMouseDriveSelection) state.itemIndex = idx;
 
-          if (hasItem && mouse.clicked) {
+          if (hasItem && ready && mouse.clicked) {
             try { playUIConfirmBlip(); } catch {}
             battleActions.confirmUseSelectedItem();
             return true;
@@ -281,7 +292,7 @@ export function handleBattleMouse({
         // ✅ CHANGE: hover-detect always (even not ready) so hover ping works
         if (pointInRect(mouse.x, mouse.y, r)) {
           hitSomething = true;
-          setHover({ kind: "specialSlot", index: i });
+          if (canMouseDriveSelection) setHover({ kind: "specialSlot", index: i });
           if (typeof mouse.setCursor === "function") mouse.setCursor("pointer");
 
           if (canMouseDriveSelection) state.specialIndex = i;
@@ -299,11 +310,22 @@ export function handleBattleMouse({
 
   // --- target modes: choose an ally ---
   if (state.uiMode === "itemTarget" || state.uiMode === "specialTarget") {
+    const pendingItemEntry =
+      state.uiMode === "itemTarget" &&
+      Array.isArray(state.inventory) &&
+      Number.isFinite(state.pendingItemIndex) &&
+      state.pendingItemIndex >= 0 &&
+      state.pendingItemIndex < state.inventory.length
+        ? state.inventory[state.pendingItemIndex]
+        : null;
+    const pendingItemDef = pendingItemEntry ? items[pendingItemEntry.id] : null;
+    const allowDownedItemTarget = state.uiMode === "itemTarget" && !!pendingItemDef?.revive;
+
     let hitTarget = false;
     for (let i = 0; i < state.party.length; i++) {
       const m = state.party[i];
       if (!m) continue;
-      if (m.hp <= 0) continue;
+      if (m.hp <= 0 && !allowDownedItemTarget) continue;
 
       const r = {
         x: BATTLE_LAYOUT.party.x + i * BATTLE_LAYOUT.party.dx,
@@ -314,7 +336,7 @@ export function handleBattleMouse({
       if (pointInRect(mouse.x, mouse.y, r)) {
         hitTarget = true;
         hitSomething = true;
-        setHover({ kind: "target", index: i });
+        if (canMouseDriveSelection) setHover({ kind: "target", index: i });
         if (typeof mouse.setCursor === "function") mouse.setCursor("pointer");
 
         if (canMouseDriveSelection) state.targetIndex = i;
@@ -337,7 +359,7 @@ export function handleBattleMouse({
     }
   }
 
-  if (!hitSomething) {
+  if (!hitSomething || !canMouseDriveSelection) {
     setHover({ kind: null, index: -1 });
   }
 

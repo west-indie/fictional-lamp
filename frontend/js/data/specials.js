@@ -1222,18 +1222,6 @@ export const specials = {
       ],
       // Page 1
       [
-
-        {
-          id: "office_space_passive_resistance",
-          name: "Passive Resistance",
-          description: "You simply stop caring. The enemy’s attacks lose impact.",
-          kind: "debuffEnemy",
-          target: "enemy",
-          defDebuffPct: 0.3,
-          defDebuffTurns: 2,
-          cooldownTurns: 4
-        },
-
         {
           id: "office_space_red_stapler",
           name: "Red Stapler",
@@ -1244,6 +1232,16 @@ export const specials = {
           cooldownTurns: 3
         },
         {
+          id: "office_space_passive_resistance",
+          name: "Passive Resistance",
+          description: "You simply stop caring. The enemy’s attacks lose impact.",
+          kind: "debuffEnemy",
+          target: "enemy",
+          defDebuffPct: 0.3,
+          defDebuffTurns: 2,
+          cooldownTurns: 4
+        },
+        {
           id: "office_space_corporate_restructuring",
           name: "Corporate Restructuring",
           description: "Slash inefficiencies—at a personal cost.",
@@ -1251,7 +1249,7 @@ export const specials = {
           target: "enemy",
           powerMultiplier: 4.2,
           selfDefDebuffPct: 0.15,
-          seldDefDebuffTurns: 2,
+          selfDefDebuffTurns: 2,
           cooldownTurns: 5
         }
       ],
@@ -1263,8 +1261,11 @@ export const specials = {
           description: "Crushing dread slows the enemy’s next move.",
           kind: "statusEnemy",
           target: "enemy",
+          status: "dazed",
+          chance: 1,
+          turns: 1,
           nextHitVulnActive: true,
-          nextHitVulnPct: 0.35,
+          nextHitVulnPct: 0.5,
           nextHitVulnTurns: 1,
           cooldownTurns: 4
         },
@@ -1273,8 +1274,8 @@ export const specials = {
           name: "Flair Compliance",
           description: "Mandatory positivity boosts team performance.",
           kind: "buffParty",
-          target: "party",
-          atkBuffPct: 2,
+          target: "team",
+          atkBuffPct: 0.2,
           atkBuffTurns: 2,
           cooldownTurns: 4
         },
@@ -1372,7 +1373,7 @@ export const specials = {
           cooldownTurns: 4
         },
         {
-          id: "Howl's Heart",
+          id: "howls_heart",
           name: "Howl's Heart",
           description: "A vow of warmth and magic restores what was lost.",
           kind: "healAllyMissingPct",
@@ -1418,22 +1419,54 @@ export const specials = {
       // Page 1 (Space toggle)
       [
         {
-          id: "purple_rain_purple_rain",
-          name: "Purple Rain",
-          description: "A cathartic storm cleanses the mind and soul.",
-          kind: "healTeamMissingPct",
-          target: ["team", "heal"],
-          missingHealPct: 0.75,
-          cooldownTurns: 5
-        },
-        {
           id: "purple_rain_darling_nikki",
           name: "Darling Nikki",
           description: "A dangerous confession leaves enemies exposed!",
-          kind: "damageEnemy",
-          target: "enemy",
-          powerMultiplier: 1.75,
-          cooldownTurns: 3
+          kind: "dualEffect",
+          cooldownTurns: 3,
+
+          effects: [
+            {
+              kind: "damageEnemy",
+              target: "enemy",
+              powerMultiplier: 1.75
+            },
+            {
+              kind: "STATUS",
+              target: "enemy",
+              status: "stun",
+              turns: 1,
+              chance: 0.4
+            }
+          ]
+        },
+        {
+          id: "purple_rain_jungle_love",
+          name: "Jungle Love",
+          description: "Unfiltered funk and swagger overwhelm the enemy's senses.",
+          kind: "dualEffect",
+          cooldownTurns: 3,
+
+          effects: [
+            {
+              kind: "damageEnemy",
+              target: "enemy",
+              powerMultiplier: 1.6
+            },
+            {
+              kind: "STATUS",
+              target: "enemy",
+              status: "confused",
+              turns: 3,
+              chance: 0.8,
+
+              // confusion system knobs (used by your confusion logic)
+              confuseProcChance: 0.35,
+              confuseClearChance: 0.25,
+              confuseRampProc: 0.10,
+              confuseRampClear: 0.10
+            }
+          ]
         },
         {
           id: "purple_rain_lake_minnetonka",
@@ -1445,11 +1478,56 @@ export const specials = {
           revivePct: 0.75,
           cooldownTurns: 4,
         }
+      ],
+      [
+        {
+          id: "purple_rain_first_avenue",
+          name: "First Avenue Showstopper",
+          description: "A legendary First Avenue performance leaves the crowd breathless and the enemy stunned.",
+          kind: "STATUS",
+          target: ["enemy"],
+          status: "stun",
+          turns: 2,
+          chance: 1,
+          cooldownTurns: 5
+        },
+        {
+          id: "purple_rain_sex_shooter",
+          name: "Sex Shooter",
+          description: "A provocative distraction throws the enemy completely off their game.",
+          kind: "dualEffect",
+          cooldownTurns: 3,
+
+          effects: [
+            {
+              kind: "damageEnemy",
+              target: "enemy",
+              powerMultiplier: 2
+            },
+            {
+              kind: "STATUS",
+              target: "enemy",
+              status: "dazed",
+              turns: 2,
+              chance: 0.8
+            }
+          ]
+        },
+        {
+        id: "purple_rain_purple_rain",
+          name: "Purple Rain",
+          description: "A cathartic storm cleanses the mind and soul.",
+          kind: "healTeamMissingPct",
+          target: "team",
+          missingHealPct: 0.75,
+          cooldownTurns: 5
+        }
       ]
     ],
     pageMeta: [
       { includeGenre: true },   // page 1: signature + genre
-      { includeGenre: false } 
+      { includeGenre: false },
+      {includeGenre: false } 
     ]
   },
   harry_potter_2001: {
@@ -1540,11 +1618,22 @@ export const specials = {
           id: "god_only_knows",
           name: "God Only Knows",
           description: "It's a love song...AND a suicide note!",
-          kind: "healAllyAndHit",
-          target: ["ally", "heal", "enemy", "hit"],
-          missingHealPct: 0.55,
-          powerMultiplier: 1.45,
-          cooldownTurns: 4
+          kind: "dualEffect",
+          cooldownTurns: 4,
+
+          effects: [
+            {
+              kind: "healAllyMissingPct",
+              target: "ally",
+              missingHealPct: 0.55,
+              revivePct: 0.55
+            },
+            {
+              kind: "damageEnemy",
+              target: "enemy",
+              powerMultiplier: 1.45
+            }
+          ]
         },
         {
           id: "surfs_up",
@@ -1552,7 +1641,7 @@ export const specials = {
           description: "A children's song that flows into a spiritual awakening of the mind and soul, allowing you to give yourself to god.",
           kind: "healSelfMissingPct",
           target: "self",
-          amount: 0.9,
+          missingHealPct: 0.9,
           cooldownTurns: 5
         }
 
@@ -1587,7 +1676,7 @@ export const specials = {
           defPct: 0.20,
           turns: 2,
           cooldownTurns: 4
-        },
+        }
         ],
         [        
         {
@@ -1606,28 +1695,41 @@ export const specials = {
           name: "Kill Your Darlings",
           description: "You cut what doesn’t matter. Momentum stalls, and only the essentials remain.",
           kind: "STATUS",
-          target: ["enemy", "status"],
+          target: ["enemy"],
+
           status: "cooldown_lock",
           turns: 2,
+          chance: 1,
+
           nextHitVulnActive: true,
           nextHitVulnPct: 0.35,
           nextHitVulnTurns: 2,
+
           cooldownTurns: 5
         },
         {
           id: "the_orchestra",
           name: "Play The Orchestra",
           description: "You conduct the moment. Every part locks in at once—your entire team surges forward in perfect sync.",
-          kind: "teamStrikeBuff",
-          target: ["team", "teamStrike", "buff"],
-          atkPct: 0.30,
-          defPct: 0.25,
-          turns: 2,
-          totalMinMult: 1.6,
-          totalMaxMult: 2.6,
-          cooldownTurns: 5
-        }
+          kind: "dualEffect",
+          cooldownTurns: 5,
 
+          effects: [
+            {
+              kind: "buffParty",
+              target: "team",
+              atkPct: 0.30,
+              defPct: 0.25,
+              turns: 2
+            },
+            {
+              kind: "teamStrike",
+              target: "enemy",
+              totalMinMult: 1.6,
+              totalMaxMult: 2.6
+            }
+          ]
+        }
       ]
     ],
     pageMeta: [
@@ -1664,7 +1766,7 @@ export const extraSpecials = {
       powerMultiplier: 2.1, // stronger (single-genre)
       cooldownTurns: 3
     }
-  ]
+  ],
 
   // NOTE:
   // Office Space is now handled via specials.office_space.pages,

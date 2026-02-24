@@ -35,7 +35,7 @@ export const movies = [
   { id: "avengers", title: "The Avengers", shortTitle: "The Avengers", runtime: 143, imdb: 8.0 },
   { id: "empire_strikes_back", title: "The Empire Strikes Back", shortTitle: "The Empire Strikes Back", runtime: 124, imdb: 8.7 },
   { id: "mad_max_fury_road", title: "Mad Max: Fury Road", shortTitle: "Mad Max: Fury Road", runtime: 120, imdb: 8.1 },
-  { id: "harry_potter_2001", title: "Harry Potter and the Sorcerer's Stone", shortTitle: "Harry Potter (2001)", runtime: 152, imdb: 7.6 },
+  { id: "harry_potter_2001", title: "Harry Potter and the Sorcerer's Stone", shortTitle: "Harry Potter and Sorcerer's", runtime: 152, imdb: 7.6 },
   { id: "avatar", title: "Avatar", shortTitle: "Avatar", runtime: 162, imdb: 7.8 },
   { id: "zombieland", title: "Zombieland", shortTitle: "Zombieland", runtime: 88, imdb: 7.5 },
   { id: "la_la_land", title: "La La Land", shortTitle: "La La Land", runtime: 128, imdb: 8.0 },

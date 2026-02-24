@@ -1,35 +1,17 @@
 // frontend/js/systems/specialSystem.js
 //
-// ✅ Update (combo-tag targets):
-// - `special.target` can be a string OR an array of tags.
-//   Examples:
-//     target: "enemy"
-//     target: ["team","teamStrike"]
-//     target: ["ally","heal","revive"]
-// - "Base target" (self/ally/enemy/team) is used ONLY for:
-//   - picking targets in UI / narration {target}
-// - Extra tags (teamStrike, revive, heal, debuff, buff, etc.) are available
-//   for your UI combo text rules (in battleHelpPanel.js) and for future branching.
-// - Existing logic remains compatible with legacy string targets.
-//
-// Notes:
-// - This file applies buffs/debuffs as actor/enemy `statuses` with `*Pct` + `*Turns` keys.
-// - It supports temp shields via `actor.tempShield`.
-// - It does NOT globally tick status durations; keep that separate.
-//
-// ✅ Added support for "missing kinds" found in specials.js / your pages:
-// - debuffEnemy (alias of ENEMY_DEBUFF; supports both schemas)
-// - buffParty (team ATK/DEF buffs; supports both schemas)
-// - statusEnemy (alias of STATUS; enemy-default)
-//
-// ✅ HealTeamMissingPct now heals OR revives:
-// - living allies: heals a % of missing HP
-// - downed allies: revives to revivePct * maxHp (fallback: missingHealPct)
+// Step B â€” execution only:
+// - Builds unified specials list (signature + genre)
+// - Executes specials and returns structured results:
+//     { used, effects, error, meta }
+// - NO narration strings are constructed here.
 
 import { imdbMultiplier } from "./imdbScaling.js";
+import { PLAYER_ATK_MULT } from "./damageSystem.js";
 import { genreSpecials } from "../data/genreSpecials.js";
 import { getAllSignatureSpecials } from "../data/specials.js";
-import { specialEffectTextByMovie } from "../data/specialEffectText.js";
+
+import { normalizeTargetTags as normalizeTags, getBaseTargetFromTags } from "./specialTags.js";
 
 const DEFAULT_COOLDOWN_TURNS = 3;
 
@@ -57,32 +39,103 @@ function ensureCooldownMap(actor) {
   return actor.specialCooldowns;
 }
 
+// -------- kind normalization (local, behavior-preserving) --------
+function normalizeKind(kind) {
+  return String(kind || "").trim();
+}
+
 // -------- target tags / base target helpers --------
 
 function normalizeTargetTags(target) {
-  if (Array.isArray(target)) return target.filter(Boolean).map(String);
-  if (typeof target === "string" && target.trim()) return [target.trim()];
-  return [];
-}
-
-function targetHas(special, tag) {
-  return normalizeTargetTags(special?.target).includes(tag);
+  // canonical: supports string OR tag array
+  return normalizeTags(target);
 }
 
 function getBaseTargetTag(special) {
-  // Base target determines selection / narration target name.
   const tags = normalizeTargetTags(special?.target);
 
-  if (tags.includes("self")) return "self";
-  if (tags.includes("ally")) return "ally";
-  if (tags.includes("enemy")) return "enemy";
-  if (tags.includes("team")) return "team";
-  if (tags.includes("party")) return "team"; // legacy support
+  const base = typeof getBaseTargetFromTags === "function" ? getBaseTargetFromTags(tags) : null;
+  if (base) return base;
 
-  // Legacy: if target was a string but not one of the above
-  if (typeof special?.target === "string" && special.target.trim()) return special.target.trim();
-
+  if (typeof special?.target === "string" && special.target.trim()) {
+    return special.target.trim().toLowerCase();
+  }
   return "enemy";
+}
+
+// ----------------- dualEffect helpers -----------------
+
+function getEffectsListFromSpecial(sp) {
+  if (!sp) return [];
+  if (Array.isArray(sp.effects)) return sp.effects;
+  if (Array.isArray(sp.steps)) return sp.steps; // allow "steps" alias if you ever use it
+  return [];
+}
+
+function normalizeStepTarget(t) {
+  if (Array.isArray(t)) return t[0] || "enemy";
+  if (typeof t === "string" && t.trim()) return t.trim().toLowerCase();
+  return "enemy";
+}
+
+function deriveTargetTagsFromDualEffects(effectsList) {
+  const set = new Set();
+  for (const st of effectsList) {
+    const bt = normalizeStepTarget(st?.target);
+    if (bt === "self" || bt === "ally" || bt === "team" || bt === "enemy") set.add(bt);
+  }
+  // stable ordering (UI friendliness)
+  const ordered = ["self", "ally", "team", "enemy"].filter((k) => set.has(k));
+  return ordered.length ? ordered : ["enemy"];
+}
+
+function mergeEffects(base, add) {
+  const out = base || {};
+  const e = add || {};
+
+  // sums
+  const sumKeys = ["damageDealt", "healedHp", "shieldAdded", "teamDmg", "teamHeal"];
+  for (const k of sumKeys) {
+    if (typeof e[k] === "number") out[k] = Number(out[k] || 0) + Number(e[k] || 0);
+  }
+
+  // take max (pct + turns)
+  const maxKeys = [
+    "atkBuffPct",
+    "defBuffPct",
+    "enemyAtkDebuffPct",
+    "enemyDefDebuffPct",
+    "selfDefDebuffPct",
+    "damageReductionPct",
+    "nextHitVulnPct",
+
+    "atkBuffTurns",
+    "defBuffTurns",
+    "enemyAtkDebuffTurns",
+    "enemyDefDebuffTurns",
+    "selfDefDebuffTurns",
+    "damageReductionTurns",
+    "nextHitVulnTurns",
+    "shieldTurns",
+    "statusTurns"
+  ];
+  for (const k of maxKeys) {
+    if (typeof e[k] === "number") out[k] = Math.max(Number(out[k] || 0), Number(e[k] || 0));
+  }
+
+  // flags / misc
+  if (e.revived) out.revived = true;
+  if (e.teamRevive) out.teamRevive = true;
+  if (typeof e.revivedCount === "number") out.revivedCount = Math.max(Number(out.revivedCount || 0), Number(e.revivedCount));
+
+  // statuses
+  if (e.statusApplied) {
+    if (!out.statusApplied) out.statusApplied = e.statusApplied;
+    if (!Array.isArray(out.statusAppliedList)) out.statusAppliedList = [];
+    out.statusAppliedList.push(e.statusApplied);
+  }
+
+  return out;
 }
 
 // ----------------- status helpers -----------------
@@ -125,15 +178,23 @@ function setPctDebuff(target, statKey, pct, turns = 2) {
   s[tk] = Math.max(Number(s[tk] || 0), Number(turns || 0));
 }
 
-function applyShield(actor, amount, turns = 2) {
+function applyShield(actor, amount) {
+  if (typeof beforeShieldTargetHook === "function") beforeShieldTargetHook(actor);
   if (!actor.tempShield) actor.tempShield = 0;
-  actor.tempShield += Math.max(0, roundInt(amount || 0));
+  const added = Math.max(0, roundInt(amount || 0));
+  actor.tempShield += added;
 
-  const s = ensureStatuses(actor);
-  s.shieldTurns = Math.max(Number(s.shieldTurns || 0), Number(turns || 0));
+  // âœ… Barrier rule:
+  // - NO shieldTurns written
+  // - Barrier persists until tempShield is absorbed
+  return added;
 }
 
+let beforeHealTargetHook = null;
+let beforeShieldTargetHook = null;
+
 function applyHeal(target, amount) {
+  if (typeof beforeHealTargetHook === "function") beforeHealTargetHook(target);
   const before = Number(target.hp || 0);
   const maxHp = Number(target.maxHp || 0);
   target.hp = clamp(before + Number(amount || 0), 0, maxHp);
@@ -180,223 +241,13 @@ function rollChance(p) {
 
 function applyGenericStatus(target, statusKey, turns) {
   const s = ensureStatuses(target);
-  const tk = `${statusKey}Turns`;
+
+  // âœ… Safety: always store canonical lowercase keys (stunTurns, dazedTurns, confusedTurns)
+  const key = String(statusKey || "").trim().toLowerCase();
+  if (!key) return;
+
+  const tk = `${key}Turns`;
   s[tk] = Math.max(Number(s[tk] || 0), Number(turns || 1));
-}
-
-// ---------------- TEXT / EFFECT SUMMARY HELPERS ----------------
-
-function shortTitle(actorOrMember) {
-  const t = actorOrMember?.movie?.title || actorOrMember?.name || "Actor";
-  return String(t).slice(0, 30);
-}
-
-function renderTemplate(str, vars) {
-  return String(str || "").replace(/\{(\w+)\}/g, (_, k) => {
-    return vars[k] != null ? String(vars[k]) : `{${k}}`;
-  });
-}
-
-function asTemplateList(v) {
-  if (typeof v === "string" && v.trim()) return [v.trim()];
-  if (Array.isArray(v)) return v.map((s) => (typeof s === "string" ? s.trim() : "")).filter(Boolean);
-  return [];
-}
-
-function renderEffectTemplateLines(templates, vars) {
-  return asTemplateList(templates).map((tpl) => renderTemplate(tpl, vars));
-}
-
-/**
- * Default effect-summary generator + optional per-effect override templates.
- */
-function buildEffectLines(effects, targetPrefix = "", enemyName = "", effectTextOverride = null, contextVars = null) {
-  if (!effects) return [];
-
-  const prefix = targetPrefix ? `${String(targetPrefix).trim()} ` : "";
-  const enemyLabel = enemyName || "the enemy";
-  const lines = [];
-
-  const baseVars = {
-    target: String(targetPrefix).trim(),
-    enemy: enemyLabel,
-    actor: contextVars?.actor || "",
-    move: contextVars?.move || "",
-    value: ""
-  };
-
-  const add = (effectKey, defaultLineFn, valueForTemplate) => {
-    const override = effectTextOverride?.[effectKey];
-    if (override) {
-      lines.push(...renderEffectTemplateLines(override, { ...baseVars, value: valueForTemplate }));
-      return;
-    }
-    const fallback = defaultLineFn();
-    if (fallback) lines.push(fallback);
-  };
-
-  if (effects.damageDealt > 0) {
-    add("damageDealt", () => `${enemyLabel} takes ${effects.damageDealt} damage.`, effects.damageDealt);
-  }
-
-  if (effects.healedHp > 0) {
-    add("healedHp", () => `${prefix}heals ${effects.healedHp} HP.`, effects.healedHp);
-  }
-
-  if (effects.shieldAdded > 0) {
-    const t = effects.shieldTurns ? ` (${effects.shieldTurns}T)` : "";
-    add("shieldAdded", () => `${prefix}gains a shield of ${effects.shieldAdded}${t}.`, effects.shieldAdded);
-  }
-
-  if (effects.atkBuffPct > 0) {
-    const t = effects.atkBuffTurns ? ` (${effects.atkBuffTurns}T)` : "";
-    add(
-      "atkBuffPct",
-      () => `${prefix}ATK↑ ${(effects.atkBuffPct * 100).toFixed(0)}%${t}.`,
-      (effects.atkBuffPct * 100).toFixed(0)
-    );
-  }
-
-  if (effects.defBuffPct > 0) {
-    const t = effects.defBuffTurns ? ` (${effects.defBuffTurns}T)` : "";
-    add(
-      "defBuffPct",
-      () => `${prefix}DEF↑ ${(effects.defBuffPct * 100).toFixed(0)}%${t}.`,
-      (effects.defBuffPct * 100).toFixed(0)
-    );
-  }
-
-  if (effects.damageReductionPct > 0) {
-    const t = effects.damageReductionTurns ? ` (${effects.damageReductionTurns}T)` : "";
-    add(
-      "damageReductionPct",
-      () => `${prefix}takes ${(effects.damageReductionPct * 100).toFixed(0)}% less damage${t}.`,
-      (effects.damageReductionPct * 100).toFixed(0)
-    );
-  }
-
-  if (effects.enemyAtkDebuffPct > 0) {
-    const t = effects.enemyAtkDebuffTurns ? ` (${effects.enemyAtkDebuffTurns}T)` : "";
-    add(
-      "enemyAtkDebuffPct",
-      () => `${enemyLabel} ATK↓ ${(effects.enemyAtkDebuffPct * 100).toFixed(0)}%${t}.`,
-      (effects.enemyAtkDebuffPct * 100).toFixed(0)
-    );
-  }
-
-  if (effects.enemyDefDebuffPct > 0) {
-    const t = effects.enemyDefDebuffTurns ? ` (${effects.enemyDefDebuffTurns}T)` : "";
-    add(
-      "enemyDefDebuffPct",
-      () => `${enemyLabel} DEF↓ ${(effects.enemyDefDebuffPct * 100).toFixed(0)}%${t}.`,
-      (effects.enemyDefDebuffPct * 100).toFixed(0)
-    );
-  }
-
-  // (Optional) you can add more keys later (self debuffs, etc.) without touching targeting.
-  if (effects.statusApplied) {
-    const t = effects.statusTurns ? ` (${effects.statusTurns}T)` : "";
-    add("statusApplied", () => `${enemyLabel} suffers ${effects.statusApplied}${t}.`, effects.statusApplied);
-  }
-
-  return lines;
-}
-
-function computeTargetsForText({ actor, party, enemy, special, targetIndex }) {
-  const actorName = shortTitle(actor);
-  const baseTarget = getBaseTargetTag(special);
-
-  let targetName = "target";
-  if (baseTarget === "ally") {
-    const tgt = party?.[targetIndex];
-    targetName = tgt ? shortTitle(tgt) : "ally";
-  } else if (baseTarget === "self") {
-    targetName = actorName;
-  } else if (baseTarget === "enemy") {
-    targetName = enemy?.name || enemy?.title || "the enemy";
-  } else if (baseTarget === "team") {
-    targetName = "the team";
-  }
-
-  return { actorName, targetName };
-}
-
-function getTextTemplates(block, key) {
-  if (!block || typeof block !== "object") return [];
-  return asTemplateList(block[key]);
-}
-
-function applyCustomNarrationIfPresent({ actor, party, enemy, special, targetIndex, result }) {
-  if (!result?.used) return result;
-
-  const textBlock = special?.text;
-  if (!textBlock || typeof textBlock !== "object") return result;
-
-  const introTemplates = getTextTemplates(textBlock, "intro");
-  const outroTemplates = getTextTemplates(textBlock, "outro");
-  if (introTemplates.length === 0 && outroTemplates.length === 0) return result;
-
-  const { actorName, targetName } = computeTargetsForText({ actor, party, enemy, special, targetIndex });
-
-  const introLines = introTemplates.map((tpl) =>
-    renderTemplate(tpl, { actor: actorName, target: targetName, move: special?.name || "Special" })
-  );
-  const outroLines = outroTemplates.map((tpl) =>
-    renderTemplate(tpl, { actor: actorName, target: targetName, move: special?.name || "Special" })
-  );
-
-  const showEffects = textBlock.showEffects !== false;
-
-  // Only prefix self/ally. Enemy/team effects read better without prefixing a name.
-  let effectTargetLabel = "";
-  const baseTarget = getBaseTargetTag(special);
-  if (baseTarget === "ally") effectTargetLabel = targetName;
-  else if (baseTarget === "self") effectTargetLabel = actorName;
-
-  const enemyName = enemy?.name || enemy?.title || enemy?.movie?.title || "the enemy";
-  const effectTextOverride = textBlock.effectText || null;
-
-  const effectLines = showEffects
-    ? buildEffectLines(result.effects, effectTargetLabel, enemyName, effectTextOverride, {
-        actor: actorName,
-        move: special?.name || "Special"
-      })
-    : [];
-
-  result.lines = [...introLines, ...effectLines, ...outroLines];
-  return result;
-}
-
-/**
- * Central narration lookup.
- * Supports:
- * - exact: registry["sig:movieId:specialId"]
- * - per-movie default: registry["movie:movieId"]
- */
-function getSpecialTextForUnifiedSpecial(unifiedSpecial) {
-  if (!unifiedSpecial) return null;
-
-  // Inline always wins
-  if (unifiedSpecial.text) return unifiedSpecial.text;
-
-  const registry = specialEffectTextByMovie;
-  if (!registry) return null;
-
-  const key = unifiedSpecial.key;
-  if (key && registry[key]) return registry[key];
-
-  // signature-only movie fallback: sig:<movieId>:<id>
-  let movieId = null;
-  if (typeof key === "string" && key.startsWith("sig:")) {
-    const parts = key.split(":");
-    movieId = parts[1] || null;
-  }
-  if (movieId) {
-    const fallback = registry[`movie:${movieId}`];
-    if (fallback) return fallback;
-  }
-
-  return null;
 }
 
 // ---------------- COOLDOWNS ----------------
@@ -436,27 +287,28 @@ function signatureToUnified(movieId, signature) {
   const powerMultiplier = signature.powerMultiplier ?? signature.power ?? null;
   const amount = signature.amount ?? null;
 
-  // --- target inference (only if not explicitly authored) ---
-  // NOTE: now returns BASE tags (array) so you can add modifiers later per move.
-  let target = signature.target || null;
+    let target = signature.target || null;
+
+  // âœ… dualEffect: allow the entry to omit target entirely;
+  // we derive a sane UI/target prompt target-set from step targets.
+  if (!target && String(sigKind || "").trim() === "dualEffect") {
+    const list = getEffectsListFromSpecial(signature);
+    target = deriveTargetTagsFromDualEffects(list);
+  }
 
   if (!target) {
     if (
       sigKind === "damageEnemy" ||
       sigKind === "HIT" ||
       sigKind === "ENEMY_DEBUFF" ||
-      sigKind === "debuffEnemy" || // ✅ alias used in your specials
+      sigKind === "debuffEnemy" ||
       sigKind === "STATUS" ||
-      sigKind === "statusEnemy" // ✅ alias used in your specials
+      sigKind === "statusEnemy"
     ) {
       target = ["enemy"];
-    } else if (
-        sigKind === "healSelf" ||
-        sigKind === "healSelfMissingPct" ||
-        sigKind === "SELF_BUFF") {
+    } else if (sigKind === "healSelf" || sigKind === "healSelfMissingPct" || sigKind === "SELF_BUFF") {
       target = ["self"];
     } else if (sigKind === "healAlly" || sigKind === "healAllyMissingPct") {
-      // default base tag only; author can add ["heal","revive"] etc. in specials.js
       target = ["ally"];
     } else if (
       sigKind === "buffParty" ||
@@ -469,6 +321,36 @@ function signatureToUnified(movieId, signature) {
       target = ["enemy"];
     }
   }
+
+  target = normalizeTargetTags(target);
+
+  if (!target) {
+    if (
+      sigKind === "damageEnemy" ||
+      sigKind === "HIT" ||
+      sigKind === "ENEMY_DEBUFF" ||
+      sigKind === "debuffEnemy" ||
+      sigKind === "STATUS" ||
+      sigKind === "statusEnemy"
+    ) {
+      target = ["enemy"];
+    } else if (sigKind === "healSelf" || sigKind === "healSelfMissingPct" || sigKind === "SELF_BUFF") {
+      target = ["self"];
+    } else if (sigKind === "healAlly" || sigKind === "healAllyMissingPct") {
+      target = ["ally"];
+    } else if (
+      sigKind === "buffParty" ||
+      sigKind === "healTeam" ||
+      sigKind === "healTeamMissingPct" ||
+      sigKind === "healTeamBuff"
+    ) {
+      target = ["team"];
+    } else {
+      target = ["enemy"];
+    }
+  }
+
+  target = normalizeTargetTags(target);
 
   const unified = {
     source: "signature",
@@ -486,7 +368,6 @@ function signatureToUnified(movieId, signature) {
     amount,
     cooldownTurns,
 
-    // passthrough fields (core)
     atkPct: signature.atkPct ?? null,
     defPct: signature.defPct ?? null,
     turns: signature.turns ?? null,
@@ -495,11 +376,9 @@ function signatureToUnified(movieId, signature) {
     shield: signature.shield ?? null,
     shieldPct: signature.shieldPct ?? null,
 
-    // custom behavior params (heals)
     missingHealPct: signature.missingHealPct ?? null,
     revivePct: signature.revivePct ?? null,
 
-    // ✅ additional passthrough fields used by your specials.js variants
     selfDefDebuffPct: signature.selfDefDebuffPct ?? null,
     selfDefDebuffTurns: signature.selfDefDebuffTurns ?? null,
 
@@ -523,7 +402,9 @@ function signatureToUnified(movieId, signature) {
     sigKind
   };
 
-  unified.text = signature.text ?? getSpecialTextForUnifiedSpecial(unified);
+  unified.text = signature.text ?? null;
+  // âœ… carry dualEffect step-list through the unified special
+  unified.effects = signature.effects ?? signature.steps ?? null;
   return unified;
 }
 
@@ -554,21 +435,14 @@ function buildGenreSpecial(genreKey, tier /* "primary" | "secondary" */) {
     name: isPrimary ? def.primaryName : def.secondaryName,
     description: def.description || "",
 
-    // IMPORTANT: can be string OR array; battleHelpPanel will treat it as tags.
+    // IMPORTANT: can be string OR array; battleHelpPanel treats it as tags.
     target: def.target,
 
     data,
-    cooldownTurns: DEFAULT_COOLDOWNTURNS_SAFE()
-      ? DEFAULT_COOLDOWN_TURNS
-      : DEFAULT_COOLDOWN_TURNS, // defensive; keep constant
+    cooldownTurns: DEFAULT_COOLDOWN_TURNS,
 
-    text: intro ? { intro } : null
+    text: null
   };
-}
-
-// tiny no-op guard to prevent accidental rename mistakes during edits
-function DEFAULT_COOLDOWNTURNS_SAFE() {
-  return true;
 }
 
 function getSignatureDefsForMovie(movieId, signatureMap) {
@@ -628,74 +502,65 @@ export function executeSpecial({
   special,
   movieMetaMap, // kept for compatibility
   signatureMap, // kept for compatibility
-  targetIndex = null
+  targetIndex = null,
+  beforeHealTarget = null,
+  beforeShieldTarget = null
 }) {
-  if (!actor || actor.hp <= 0) return { lines: ["No valid actor."], used: false };
-  if (!special) return { lines: ["No special selected."], used: false };
+  if (!actor) return { used: false, error: { code: "noActor" } };
+  if (!special) return { used: false, error: { code: "noSpecial" } };
 
   if (!isSpecialReady(actor, special.key)) {
     const cd = getCooldownRemaining(actor, special.key);
-    return {
-      lines: [`${special.name} is on cooldown (${cd} turn${cd === 1 ? "" : "s"}).`],
-      used: false
-    };
+    return { used: false, error: { code: "cooldown", cooldownTurns: cd } };
   }
 
   const imdb = Number(actor?.movie?.imdb ?? 7.0);
   const M = imdbMultiplier(imdb);
 
-  // Heal/revive missing%: require base target ally (works whether target is string or tags array)
-  if (special.kind === "healAllyMissingPct" && getBaseTargetTag(special) === "ally") {
-    const result = executeHealAllyMissingPct({ actor, party, special, targetIndex });
-
-    const narrated = applyCustomNarrationIfPresent({
-      actor,
-      party,
-      enemy,
-      special,
-      targetIndex,
-      result
-    });
-
-    if (narrated?.used) {
-      startSpecialCooldown(actor, special.key, special.cooldownTurns ?? DEFAULT_COOLDOWN_TURNS);
-    }
-    return narrated;
-  }
+  const kindNorm = normalizeKind(special?.sigKind ?? special?.kind);
 
   let result;
-  if (special.source === "signature") {
+  const prevBeforeHealTargetHook = beforeHealTargetHook;
+  const prevBeforeShieldTargetHook = beforeShieldTargetHook;
+  beforeHealTargetHook = typeof beforeHealTarget === "function" ? beforeHealTarget : null;
+  beforeShieldTargetHook = typeof beforeShieldTarget === "function" ? beforeShieldTarget : null;
+
+  // Special-case ally missing% (revive/heal) â€” execution only
+  if (kindNorm === "healAllyMissingPct" && getBaseTargetTag(special) === "ally") {
+    result = executeHealAllyMissingPct({ actor, party, special, targetIndex });
+  } else if (special.source === "signature") {
     result = executeSignature({ actor, party, enemy, special, targetIndex, M });
   } else if (special.source === "genre") {
     result = executeGenre({ actor, party, enemy, special, M, targetIndex });
   } else {
-    result = { lines: ["Unknown special type."], used: false };
+    result = { used: false, error: { code: "noSpecial" } };
   }
 
-  result = applyCustomNarrationIfPresent({ actor, party, enemy, special, targetIndex, result });
+  beforeHealTargetHook = prevBeforeHealTargetHook;
+  beforeShieldTargetHook = prevBeforeShieldTargetHook;
 
+  // Cooldown is still an execution concern
   if (result?.used) {
     startSpecialCooldown(actor, special.key, special.cooldownTurns ?? DEFAULT_COOLDOWN_TURNS);
   }
 
+  // âœ… Step B: do NOT build result.lines here
   return result;
 }
 
 // Helper: heals ally for a % of missing HP; revives to a % of max HP if down
 function executeHealAllyMissingPct({ actor, party, special, targetIndex }) {
-  if (!Array.isArray(party) || party.length === 0) return { lines: ["No party to heal."], used: false };
+  if (!Array.isArray(party) || party.length === 0) return { used: false, error: { code: "noAllyTarget" } };
   if (typeof targetIndex !== "number" || targetIndex < 0 || targetIndex >= party.length) {
-    return { lines: ["No valid target selected."], used: false };
+    return { used: false, error: { code: "invalidTarget" } };
   }
 
   const target = party[targetIndex];
-  if (!target) return { lines: ["No valid target selected."], used: false };
+  if (!target) return { used: false, error: { code: "invalidTarget" } };
 
   const maxHp = target.maxHp ?? target.hpMax ?? target?.stats?.hpMax ?? target?.stats?.maxHp;
-
-  if (!maxHp || typeof maxHp !== "number") {
-    return { lines: [`${special.name} fizzles — ${target.name}'s max HP is unknown.`], used: false };
-  }
+  if (!maxHp || typeof maxHp !== "number") return { used: false, error: { code: "invalidTarget" } };
+  if (typeof beforeHealTargetHook === "function") beforeHealTargetHook(target);
 
   const pct = typeof special.missingHealPct === "number" ? special.missingHealPct : 0.75;
   const revivePct = typeof special.revivePct === "number" ? special.revivePct : pct;
@@ -704,48 +569,167 @@ function executeHealAllyMissingPct({ actor, party, special, targetIndex }) {
   if (target.hp <= 0) {
     const revivedHp = roundInt(maxHp * revivePct);
     target.hp = clamp(revivedHp, 1, maxHp);
+
     return {
       used: true,
-      lines: [
-        `${actor.name} uses ${special.name} on ${target.name}!`,
-        special.description || `${target.name} returns to the fight!`
-      ],
-      effects: { healedHp: target.hp } // optional (you may later change to revive-specific key)
+      effects: {
+        healedHp: target.hp,
+        revived: true,
+        revivedHp: target.hp
+      },
+      meta: {
+        targetIndex,
+        targetName: target.name || target.movie?.title || "ally"
+      }
     };
   }
 
   // Heal missing HP case
   const missing = Math.max(0, maxHp - target.hp);
   const healAmt = roundInt(missing * pct);
-  if (healAmt <= 0) return { lines: [`${target.name} is already at full health.`], used: false };
+  if (healAmt <= 0) return { used: false, error: { code: "invalidTarget" } };
 
   target.hp = clamp(target.hp + healAmt, 0, maxHp);
+
   return {
     used: true,
-    lines: [
-      `${actor.name} uses ${special.name} on ${target.name}!`,
-      special.description || `${target.name} feels restored.`
-    ],
-    effects: { healedHp: healAmt }
+    effects: {
+      healedHp: healAmt
+    },
+    meta: {
+      targetIndex,
+      targetName: target.name || target.movie?.title || "ally"
+    }
   };
+}
+
+function executeTeamStrike({ party, enemy, special, effectsOut }) {
+  if (!Array.isArray(party) || party.length === 0) return;
+
+  const alive = party.filter((m) => m && m.hp > 0);
+  if (alive.length === 0) return;
+
+  const min = Number(special.totalMinMult ?? 1.5);
+  const max = Number(special.totalMaxMult ?? 2.8);
+  const R = randFloat(min, max);
+
+  const atks = alive.map((m) => Number(m.atk || 0));
+  const shares = sqrtWeightShares(atks);
+
+  let total = 0;
+  for (let i = 0; i < alive.length; i++) {
+    const portionMult = R * shares[i];
+    const dmg = computeSimpleDamage(atks[i] * portionMult * PLAYER_ATK_MULT, enemy);
+    total += applyDamageToEnemy(enemy, dmg);
+  }
+
+  effectsOut.teamDmg = (effectsOut.teamDmg || 0) + total;
+  effectsOut.damageDealt = (effectsOut.damageDealt || 0) + total;
 }
 
 // ---------------- SIGNATURE EXECUTION ----------------
 
 function executeSignature({ actor, party, enemy, special, targetIndex, M }) {
-  const lines = [];
-  const title = (actor.movie?.title || "Actor").slice(0, 10);
+  const kind = normalizeKind(special.sigKind ?? special.kind);
 
-  const kind = special.sigKind ?? special.kind;
+  // âœ… Step B: execution-only result object
+  const effects = {};
+  const meta = {};
 
-  // damageEnemy (supports optional self vulnerability)
+  // Determine ally target if needed (meta only; narration layer will decide how to use it)
+  if (getBaseTargetTag(special) === "ally" && Array.isArray(party)) {
+    const tgt = party?.[targetIndex];
+    meta.targetIndex = targetIndex;
+    meta.targetName = tgt ? (tgt.movie?.title || tgt.name || "ally") : "ally";
+  }
+
+  // ---- KINDS (keep your existing behavior; only change returns) ----
+
+    // âœ… dualEffect: execute an ordered list of step-effects (each step is a normal "signature-like" effect)
+  if (kind === "dualEffect") {
+    const list = getEffectsListFromSpecial(special);
+    if (!Array.isArray(list) || list.length === 0) {
+      return { used: false, error: { code: "noEffect" } };
+    }
+
+    const merged = {};
+    const mergedMeta = { ...(meta || {}) };
+
+    // âœ… NEW: keep ordered step outputs for narration
+    const stepResults = [];
+
+    for (const step of list) {
+      if (!step || typeof step !== "object") continue;
+
+      // We execute each step using the SAME logic as a normal signature,
+      // by treating the step as a mini-special.
+      const stepSpecial = {
+        ...step,
+        kind: step.kind ?? step.sigKind ?? "",
+        sigKind: step.sigKind ?? step.kind ?? ""
+      };
+
+      const stepResult = executeSignature({
+        actor,
+        party,
+        enemy,
+        special: stepSpecial,
+        targetIndex,
+        M
+      });
+
+      // If a step fails, bubble it up (same UX as normal).
+      if (!stepResult?.used) return stepResult;
+
+      // âœ… preserve per-step outputs
+      stepResults.push({
+        kind: normalizeKind(stepSpecial.sigKind ?? stepSpecial.kind),
+        target: stepSpecial.target ?? null,
+        effects: stepResult.effects || {},
+        meta: stepResult.meta || {}
+      });
+
+      mergeEffects(merged, stepResult.effects);
+      if (stepResult?.meta) Object.assign(mergedMeta, stepResult.meta);
+    }
+
+    // âœ… expose the step list to the narration layer
+    mergedMeta.stepResults = stepResults;
+
+    // Never-silent fallback stays consistent with your normal signature behavior
+    const didAnything =
+      !!merged.damageDealt ||
+      !!merged.healedHp ||
+      !!merged.shieldAdded ||
+      !!merged.statusApplied ||
+      !!merged.atkBuffPct ||
+      !!merged.defBuffPct ||
+      !!merged.enemyAtkDebuffPct ||
+      !!merged.enemyDefDebuffPct ||
+      !!merged.nextHitVulnPct ||
+      !!merged.damageReductionPct ||
+      !!merged.selfDefDebuffPct ||
+      !!merged.teamRevive ||
+      !!merged.teamDmg ||
+      !!merged.teamHeal;
+
+    if (!didAnything) {
+      const dmg = computeSimpleDamage(Number(actor.atk || 0) * PLAYER_ATK_MULT, enemy);
+      applyDamageToEnemy(enemy, dmg);
+      merged.damageDealt = dmg;
+    }
+
+    return { used: true, effects: merged, meta: mergedMeta };
+  }
+
   if (kind === "damageEnemy") {
     const mult = Number(special.powerMultiplier ?? 1.5);
     const atk = Number(actor.atk || 0);
-    const dmg = computeSimpleDamage(atk * mult, enemy);
+    const dmg = computeSimpleDamage(atk * mult * PLAYER_ATK_MULT, enemy);
     applyDamageToEnemy(enemy, dmg);
 
-    // Optional: apply self vulnerability (def debuff on self), refresh duration
+    effects.damageDealt = dmg;
+
     if (typeof special.selfDefDebuffPct === "number" && special.selfDefDebuffPct > 0) {
       const turns = normalizeTurns(special.selfDefDebuffTurns ?? 2, 2);
 
@@ -755,118 +739,79 @@ function executeSignature({ actor, party, enemy, special, targetIndex, M }) {
       actor.statuses.defDebuffPct = Math.max(currentPct, Number(special.selfDefDebuffPct));
       actor.statuses.defDebuffTurns = turns;
 
-      lines.push(
-        `${title} uses ${special.name} for ${dmg} damage! (Exposed: DEF ↓ ${Math.round(
-          actor.statuses.defDebuffPct * 100
-        )}% for ${turns}T)`
-      );
-
-      return {
-        lines,
-        used: true,
-        effects: {
-          damageDealt: dmg,
-          selfDefDebuffPct: actor.statuses.defDebuffPct,
-          selfDefDebuffTurns: turns
-        }
-      };
+      effects.selfDefDebuffPct = actor.statuses.defDebuffPct;
+      effects.selfDefDebuffTurns = turns;
     }
-
-    lines.push(`${title} uses ${special.name} for ${dmg} damage!`);
-    return { lines, used: true, effects: { damageDealt: dmg } };
   }
 
+  // HIT (alias)
+  if (kind === "HIT") {
+    const mult = Number(special.powerMultiplier ?? 1.5);
+    const atk = Number(actor.atk || 0);
+    const dmg = computeSimpleDamage(atk * mult * PLAYER_ATK_MULT, enemy);
+    applyDamageToEnemy(enemy, dmg);
+    effects.damageDealt = (effects.damageDealt || 0) + dmg;
+  }
+
+  // teamStrike (signature step kind used by dualEffect)
+  if (kind === "teamStrike") {
+    if (!enemy) return { used: false, error: { code: "noEnemy" } };
+    executeTeamStrike({ party, enemy, special, effectsOut: effects });
+  }
+
+  // healSelf flat
   if (kind === "healSelf") {
     const amt = Number(special.amount ?? 30);
-    const healed = applyHeal(actor, amt);
-
-    lines.push(`${title} uses ${special.name} and heals ${healed} HP.`);
-    return { lines, used: true, effects: { healedHp: healed } };
+    effects.healedHp = applyHeal(actor, amt);
   }
 
-    // ✅ Heal self for a % of missing HP; revives if down
+  // healSelfMissingPct (revive-friendly)
   if (kind === "healSelfMissingPct") {
     const maxHp = Number(actor.maxHp ?? actor.hpMax ?? actor?.stats?.maxHp ?? 0);
+    if (maxHp > 0) {
+      const pct = typeof special.missingHealPct === "number" ? special.missingHealPct : 0.5;
+      const revivePct = typeof special.revivePct === "number" ? special.revivePct : pct;
 
-    if (!maxHp || maxHp <= 0) {
-      return { lines: ["Max HP unknown."], used: false };
+      if (Number(actor.hp || 0) <= 0) {
+        const revivedHp = clamp(roundInt(maxHp * revivePct), 1, maxHp);
+        actor.hp = revivedHp;
+        effects.revived = true;
+        effects.revivedHp = revivedHp;
+        effects.healedHp = revivedHp;
+      } else {
+        const missing = Math.max(0, maxHp - Number(actor.hp || 0));
+        const healAmt = roundInt(missing * pct);
+        effects.healedHp = applyHeal(actor, healAmt);
+      }
     }
-
-    const pct = typeof special.missingHealPct === "number"
-      ? special.missingHealPct
-      : 0.5;
-
-    const revivePct = typeof special.revivePct === "number"
-      ? special.revivePct
-      : pct;
-
-    // Revive case
-    if (actor.hp <= 0) {
-      const revivedHp = clamp(roundInt(maxHp * revivePct), 1, maxHp);
-      actor.hp = revivedHp;
-
-      lines.push(`${title} uses ${special.name} and returns to the fight!`);
-      return {
-        lines,
-        used: true,
-        effects: { healedHp: revivedHp }
-      };
-    }
-
-    // Heal missing HP case
-    const missing = Math.max(0, maxHp - Number(actor.hp || 0));
-    const healAmt = roundInt(missing * pct);
-
-    if (healAmt <= 0) {
-      return { lines: [`${title} is already at full health.`], used: false };
-    }
-
-    actor.hp = clamp(actor.hp + healAmt, 0, maxHp);
-
-    lines.push(`${title} uses ${special.name} and restores ${healAmt} HP.`);
-    return {
-      lines,
-      used: true,
-      effects: { healedHp: healAmt }
-    };
   }
 
-
+  // healAlly flat
   if (kind === "healAlly") {
-    if (targetIndex == null || targetIndex < 0 || targetIndex >= party.length) {
-      return { lines: ["Choose an ally target."], used: false };
+    if (!Array.isArray(party) || targetIndex == null || targetIndex < 0 || targetIndex >= party.length) {
+      return { used: false, error: { code: "noAllyTarget" } };
     }
     const target = party[targetIndex];
     const amt = Number(special.amount ?? 30);
-    const healed = applyHeal(target, amt);
-
-    lines.push(`${title} uses ${special.name} on ${target.movie.title.slice(0, 10)} (+${healed} HP).`);
-    return { lines, used: true, effects: { healedHp: healed } };
+    effects.healedHp = applyHeal(target, amt);
   }
 
+  // healTeam flat (living only)
   if (kind === "healTeam") {
-    if (!Array.isArray(party) || party.length === 0) {
-      return { lines: ["No party to heal."], used: false };
-    }
+    if (!Array.isArray(party) || party.length === 0) return { used: false, error: { code: "noParty" } };
 
     const amt = Number(special.amount ?? 30);
-    let totalHealed = 0;
-
+    let total = 0;
     for (const m of party) {
-      if (!m || m.hp <= 0) continue; // living allies only
-      totalHealed += applyHeal(m, amt);
+      if (!m || m.hp <= 0) continue;
+      total += applyHeal(m, amt);
     }
-
-    lines.push(`${title} uses ${special.name} and heals the team (+${totalHealed} total HP).`);
-    return { lines, used: true, effects: { healedHp: totalHealed } };
+    effects.healedHp = total;
   }
 
-  // ✅ Team heal for a % of each ally's missing HP (signature)
-  // ✅ ALSO revives downed allies to revivePct * maxHp (or missingHealPct if revivePct absent)
+  // healTeamMissingPct (heals + revives) â€” keep your behavior, but return structured effects
   if (kind === "healTeamMissingPct") {
-    if (!Array.isArray(party) || party.length === 0) {
-      return { lines: ["No party to heal."], used: false };
-    }
+    if (!Array.isArray(party) || party.length === 0) return { used: false, error: { code: "noParty" } };
 
     const pct = typeof special.missingHealPct === "number" ? special.missingHealPct : 0.5;
     const revivePct = typeof special.revivePct === "number" ? special.revivePct : pct;
@@ -880,42 +825,38 @@ function executeSignature({ actor, party, enemy, special, targetIndex, M }) {
       const maxHp = Number(m.maxHp ?? 0);
       if (maxHp <= 0) continue;
 
-      // Revive case
       if (Number(m.hp || 0) <= 0) {
         const revivedHp = clamp(roundInt(maxHp * revivePct), 1, maxHp);
         m.hp = revivedHp;
-        totalHealed += revivedHp; // counts as "healed" for summary purposes
+        totalHealed += revivedHp;
         revivedCount += 1;
         continue;
       }
 
-      // Heal missing HP case
       const missing = Math.max(0, maxHp - Number(m.hp || 0));
       const healAmt = roundInt(missing * pct);
       if (healAmt <= 0) continue;
-
       totalHealed += applyHeal(m, healAmt);
     }
 
     if (totalHealed <= 0 && revivedCount <= 0) {
-      return { lines: ["The team is already fully recovered."], used: false };
+      return { used: false, error: { code: "noEffect" } };
     }
 
-    const reviveText = revivedCount > 0 ? `, revived ${revivedCount}` : "";
-    lines.push(`${title} uses ${special.name}! The team regains ${totalHealed} total HP${reviveText}.`);
-    return { lines, used: true, effects: { healedHp: totalHealed } };
+    effects.healedHp = totalHealed;
+    if (revivedCount > 0) {
+      effects.teamRevive = true;
+      effects.revivedCount = revivedCount;
+    }
   }
 
-  // ✅ Team heal + team buff (signature) using missingHealPct
+  // healTeamBuff (heal missing% + team buffs)
   if (kind === "healTeamBuff") {
-    if (!Array.isArray(party) || party.length === 0) {
-      return { lines: ["No party to affect."], used: false };
-    }
+    if (!Array.isArray(party) || party.length === 0) return { used: false, error: { code: "noParty" } };
 
     const turns = normalizeTurns(special.turns ?? 2, 2);
     const atkUp = normalizePct(special.atkPct ?? 0);
     const defUp = normalizePct(special.defPct ?? 0);
-
     const pct = typeof special.missingHealPct === "number" ? special.missingHealPct : 0.5;
 
     let totalHealed = 0;
@@ -934,138 +875,90 @@ function executeSignature({ actor, party, enemy, special, targetIndex, M }) {
       if (defUp > 0) setPctBuff(m, "def", defUp, turns);
     }
 
-    lines.push(`${title} uses ${special.name}! (+${totalHealed} total HP, buffs ${turns}T).`);
+    effects.healedHp = totalHealed;
 
-    return {
-      lines,
-      used: true,
-      effects: {
-        healedHp: totalHealed,
-        atkBuffPct: atkUp,
-        atkBuffTurns: atkUp > 0 ? turns : 0,
-        defBuffPct: defUp,
-        defBuffTurns: defUp > 0 ? turns : 0
-      }
-    };
+    if (atkUp > 0) {
+      effects.atkBuffPct = atkUp;
+      effects.atkBuffTurns = turns;
+    }
+    if (defUp > 0) {
+      effects.defBuffPct = defUp;
+      effects.defBuffTurns = turns;
+    }
   }
 
-  if (kind === "HIT") {
-    const mult = Number(special.powerMultiplier ?? 1.5);
-    const atk = Number(actor.atk || 0);
-    const dmg = computeSimpleDamage(atk * mult, enemy);
-    applyDamageToEnemy(enemy, dmg);
-
-    lines.push(`${title} uses ${special.name} for ${dmg} damage!`);
-    return { lines, used: true, effects: { damageDealt: dmg } };
-  }
-
-  // ✅ ENEMY debuff + alias: debuffEnemy
+  // ENEMY debuff + alias debuffEnemy
   if (kind === "ENEMY_DEBUFF" || kind === "debuffEnemy") {
-    if (!enemy) return { lines: ["No enemy target."], used: false };
+    if (!enemy) return { used: false, error: { code: "noEnemy" } };
 
     const turns = normalizeTurns(
       special.turns ?? special.defDebuffTurns ?? special.atkDebuffTurns ?? 2,
       2
     );
 
-    // supports BOTH schemas:
-    // - authored schema: atkPct/defPct
-    // - existing schema: atkDebuffPct/defDebuffPct
     const atkDown = normalizePct(special.atkPct ?? special.atkDebuffPct);
     const defDown = normalizePct(special.defPct ?? special.defDebuffPct);
 
     if (atkDown > 0) setPctDebuff(enemy, "atk", atkDown, turns);
     if (defDown > 0) setPctDebuff(enemy, "def", defDown, turns);
 
-    if (atkDown <= 0 && defDown <= 0) {
-      lines.push(`${title} uses ${special.name}, but it has no effect.`);
-      return { lines, used: true, effects: null };
+    if (atkDown > 0) {
+      effects.enemyAtkDebuffPct = atkDown;
+      effects.enemyAtkDebuffTurns = turns;
     }
-
-    lines.push(`${title} uses ${special.name}! Debuffs applied (${turns}T).`);
-
-    return {
-      lines,
-      used: true,
-      effects: {
-        enemyAtkDebuffPct: atkDown,
-        enemyAtkDebuffTurns: atkDown > 0 ? turns : 0,
-        enemyDefDebuffPct: defDown,
-        enemyDefDebuffTurns: defDown > 0 ? turns : 0
-      }
-    };
+    if (defDown > 0) {
+      effects.enemyDefDebuffPct = defDown;
+      effects.enemyDefDebuffTurns = turns;
+    }
   }
 
+  // SELF_BUFF (atk/def + optional shield)
   if (kind === "SELF_BUFF") {
     const turns = normalizeTurns(special.turns ?? 2, 2);
 
     const atkUp = normalizePct(special.atkPct);
     const defUp = normalizePct(special.defPct);
 
-    if (atkUp > 0) setPctBuff(actor, "atk", atkUp, turns);
-    if (defUp > 0) setPctBuff(actor, "def", defUp, turns);
-
-    let shieldAdded = 0;
-    let shieldTurns = 0;
+    if (atkUp > 0) {
+      setPctBuff(actor, "atk", atkUp, turns);
+      effects.atkBuffPct = atkUp;
+      effects.atkBuffTurns = turns;
+    }
+    if (defUp > 0) {
+      setPctBuff(actor, "def", defUp, turns);
+      effects.defBuffPct = defUp;
+      effects.defBuffTurns = turns;
+    }
 
     if (special.shield != null) {
       const shieldAmt = Math.max(0, roundInt(Number(special.shield || 0)));
       if (shieldAmt > 0) {
-        applyShield(actor, shieldAmt, turns);
-        shieldAdded = shieldAmt;
-        shieldTurns = turns;
+        const added = applyShield(actor, shieldAmt);
+        effects.shieldAdded = added;
+
+        // âœ… Barrier rule: no duration
+        // effects.shieldTurns intentionally omitted
       }
     } else if (special.shieldPct != null) {
       const pct = clamp(Number(special.shieldPct || 0), 0, 1);
       const shieldAmt = roundInt(Number(actor.maxHp || 0) * pct);
       if (shieldAmt > 0) {
-        applyShield(actor, shieldAmt, turns);
-        shieldAdded = shieldAmt;
-        shieldTurns = turns;
+        const added = applyShield(actor, shieldAmt);
+        effects.shieldAdded = added;
+
+        // âœ… Barrier rule: no duration
+        // effects.shieldTurns intentionally omitted
       }
     }
-
-    if (atkUp <= 0 && defUp <= 0 && shieldAdded <= 0) {
-      lines.push(`${title} uses ${special.name}, but it has no effect.`);
-      return { lines, used: true, effects: null };
-    }
-
-    lines.push(`${title} uses ${special.name}! Buffs applied (${turns}T).`);
-
-    return {
-      lines,
-      used: true,
-      effects: {
-        atkBuffPct: atkUp,
-        atkBuffTurns: atkUp > 0 ? turns : 0,
-        defBuffPct: defUp,
-        defBuffTurns: defUp > 0 ? turns : 0,
-        shieldAdded,
-        shieldTurns
-      }
-    };
   }
 
-  // ✅ NEW: team buff (signature) — supports BOTH schemas:
-  // - atkPct/defPct + turns
-  // - atkBuffPct/defBuffPct + atkBuffTurns/defBuffTurns
+  // buffParty (team buffs)
   if (kind === "buffParty") {
-    if (!Array.isArray(party) || party.length === 0) {
-      return { lines: ["No party to buff."], used: false };
-    }
+    if (!Array.isArray(party) || party.length === 0) return { used: false, error: { code: "noParty" } };
 
-    const turns = normalizeTurns(
-      special.turns ?? special.atkBuffTurns ?? special.defBuffTurns ?? 2,
-      2
-    );
-
+    const turns = normalizeTurns(special.turns ?? special.atkBuffTurns ?? special.defBuffTurns ?? 2, 2);
     const atkUp = normalizePct(special.atkPct ?? special.atkBuffPct);
     const defUp = normalizePct(special.defPct ?? special.defBuffPct);
-
-    if (atkUp <= 0 && defUp <= 0) {
-      lines.push(`${title} uses ${special.name}, but it has no effect.`);
-      return { lines, used: true, effects: null };
-    }
 
     for (const m of party) {
       if (!m || m.hp <= 0) continue;
@@ -1073,81 +966,104 @@ function executeSignature({ actor, party, enemy, special, targetIndex, M }) {
       if (defUp > 0) setPctBuff(m, "def", defUp, turns);
     }
 
-    lines.push(`${title} uses ${special.name}! Team buffs applied (${turns}T).`);
-
-    return {
-      lines,
-      used: true,
-      effects: {
-        atkBuffPct: atkUp,
-        atkBuffTurns: atkUp > 0 ? turns : 0,
-        defBuffPct: defUp,
-        defBuffTurns: defUp > 0 ? turns : 0
-      }
-    };
+    if (atkUp > 0) {
+      effects.atkBuffPct = atkUp;
+      effects.atkBuffTurns = turns;
+    }
+    if (defUp > 0) {
+      effects.defBuffPct = defUp;
+      effects.defBuffTurns = turns;
+    }
   }
 
-  // ✅ IMPORTANT CHANGE: STATUS target selection must use base target (supports tag arrays)
-  // ✅ Alias: statusEnemy
+  // STATUS + alias statusEnemy
   if (kind === "STATUS" || kind === "statusEnemy") {
     const statusName = String(special.status || "").trim();
-    if (!statusName) {
-      lines.push(`${title} uses ${special.name}, but no status was specified.`);
-      return { lines, used: true, effects: null };
-    }
+    if (statusName) {
+      const chance = special.chance == null ? 1 : clamp(Number(special.chance || 0), 0, 1);
 
-    const turns = normalizeTurns(special.turns ?? 1, 1);
-    const chance = special.chance == null ? 1 : clamp(Number(special.chance || 0), 0, 1);
+      let tgtObj = enemy;
+      const baseTarget = getBaseTargetTag(special);
 
-    let tgtObj = enemy;
-    let tgtLabel = enemy?.name || "the enemy";
-
-    const baseTarget = getBaseTargetTag(special);
-
-    if (baseTarget === "self") {
-      tgtObj = actor;
-      tgtLabel = "self";
-    } else if (baseTarget === "ally") {
-      if (targetIndex == null || targetIndex < 0 || targetIndex >= party.length) {
-        return { lines: ["Choose an ally target."], used: false };
+      if (baseTarget === "self") tgtObj = actor;
+      else if (baseTarget === "ally") {
+        if (!Array.isArray(party) || targetIndex == null || targetIndex < 0 || targetIndex >= party.length) {
+          return { used: false, error: { code: "noAllyTarget" } };
+        }
+        tgtObj = party[targetIndex];
+      } else {
+        tgtObj = enemy;
       }
-      tgtObj = party[targetIndex];
-      tgtLabel = tgtObj?.movie?.title ? tgtObj.movie.title.slice(0, 10) : "ally";
-    } else if (baseTarget === "team") {
-      // For now, team-status is not implemented; fall back to enemy unless you extend later.
-      tgtObj = enemy;
-      tgtLabel = enemy?.name || "the enemy";
-    } else {
-      // enemy default
-      tgtObj = enemy;
-      tgtLabel = enemy?.name || "the enemy";
+
+      // âœ… NEW: stun/dazed duration comes from target's prone tag (enemy entries)
+      const sLower = statusName.toLowerCase();
+
+      // Canonical storage keys (so enemyTurnSystem/statusTickSystem can reliably read them)
+      let statusKey = statusName;
+      if (sLower.includes("stun")) statusKey = "stun";
+      else if (sLower.includes("dazed")) statusKey = "dazed";
+      else if (sLower.includes("confus")) statusKey = "confused";
+
+      const proneTurnsRaw = Number(tgtObj?.prone ?? 0);
+
+      const turns =
+        (statusKey === "stun" || statusKey === "dazed") && proneTurnsRaw > 0
+          ? Math.max(1, Math.floor(proneTurnsRaw))
+          : normalizeTurns(special.turns ?? 1, 1);
+
+      if (tgtObj && rollChance(chance)) {
+        // Store canonical turns key (stunTurns / dazedTurns / confusedTurns)
+        applyGenericStatus(tgtObj, statusKey, turns);
+
+        // Keep original wording for narration
+        effects.statusApplied = statusName;
+        effects.statusTurns = turns;
+      }
+
+      // Optional status-linked vuln payload (used by some signature moves).
+      if (tgtObj && (special.nextHitVulnActive || Number(special.nextHitVulnPct || 0) > 0)) {
+        const vulnPct = normalizePct(special.nextHitVulnPct);
+        const vulnTurns = normalizeTurns(special.nextHitVulnTurns ?? 1, 1);
+
+        if (vulnPct > 0) {
+          const s = ensureStatuses(tgtObj);
+          s.nextHitVulnActive = true;
+          s.nextHitVulnPct = Math.max(Number(s.nextHitVulnPct || 0), vulnPct);
+          s.nextHitVulnTurns = Math.max(Number(s.nextHitVulnTurns || 0), vulnTurns);
+
+          effects.nextHitVulnPct = s.nextHitVulnPct;
+          effects.nextHitVulnTurns = s.nextHitVulnTurns;
+        }
+      }
     }
-
-    if (!tgtObj) return { lines: [`No valid ${tgtLabel} target.`], used: false };
-
-    if (!rollChance(chance)) {
-      lines.push(`${title} uses ${special.name}… but it doesn’t stick.`);
-      return { lines, used: true, effects: null };
-    }
-
-    applyGenericStatus(tgtObj, statusName, turns);
-    lines.push(`${title} uses ${special.name}! ${statusName} (${turns}T).`);
-
-    return { lines, used: true, effects: { statusApplied: statusName, statusTurns: turns } };
   }
 
-  // Fallback hit
-  const dmg = computeSimpleDamage(Number(actor.atk || 0), enemy);
-  applyDamageToEnemy(enemy, dmg);
-  lines.push(`${title} uses ${special.name} for ${dmg} damage!`);
-  return { lines, used: true, effects: { damageDealt: dmg } };
+  // If nothing happened, keep your â€œnever silentâ€ behavior via a small hit
+  const didAnything =
+    !!effects.damageDealt ||
+    !!effects.healedHp ||
+    !!effects.shieldAdded ||
+    !!effects.statusApplied ||
+    !!effects.atkBuffPct ||
+    !!effects.defBuffPct ||
+    !!effects.enemyAtkDebuffPct ||
+    !!effects.enemyDefDebuffPct ||
+    !!effects.nextHitVulnPct ||
+    !!effects.damageReductionPct ||
+    !!effects.selfDefDebuffPct ||
+    !!effects.teamRevive;
+
+  if (!didAnything) {
+    const dmg = computeSimpleDamage(Number(actor.atk || 0) * PLAYER_ATK_MULT, enemy);
+    applyDamageToEnemy(enemy, dmg);
+    effects.damageDealt = dmg;
+  }
+
+  return { used: true, effects, meta };
 }
 
 // ---------------- GENRE EXECUTION ----------------
-
 function executeGenre({ actor, party, enemy, special, M, targetIndex }) {
-  const lines = [];
-  const title = (actor.movie?.title || "Actor").slice(0, 10);
   const data = special.data || {};
   const genre = special.genre;
 
@@ -1157,44 +1073,69 @@ function executeGenre({ actor, party, enemy, special, M, targetIndex }) {
     return obj.imdbScale ? base * M : base;
   };
 
-  // ACTION / SCIFI
+  // Narration-facing summary (Track A): numbers + applied flags + turns.
+  const outcome = {
+    dmg: 0,
+    teamDmg: 0,
+    teamHeal: 0,
+    heal: 0,
+    shield: 0,
+    anyDebuff: 0,
+
+    buffTurns: 0,
+    debuffTurns: 0,
+    shieldTurns: 0,
+    drTurns: 0,
+
+    teamAtkBuffApplied: false,
+    teamDefBuffApplied: false,
+
+    atkBuffApplied: false,
+    defBuffApplied: false,
+    selfDefDebuffApplied: false,
+    enemyAtkDebuffApplied: false,
+    enemyDefDebuffApplied: false,
+
+    shieldApplied: false,
+    nextHitVulnApplied: false,
+    damageReductionApplied: false
+  };
+
+  // ---------------- ACTION / SCIFI ----------------
   if (genre === "ACTION" || genre === "SCIFI") {
     const atkBuff = scaledPct(data.atkBuffPct);
     const turns = data.atkBuffPct?.turns ?? 2;
 
-    if (atkBuff > 0) setPctBuff(actor, "atk", atkBuff, turns);
+    if (atkBuff > 0) {
+      setPctBuff(actor, "atk", atkBuff, turns);
+      outcome.atkBuffApplied = true;
+      outcome.buffTurns = Math.max(outcome.buffTurns, turns);
+    }
 
     if (data.defDebuffPct) {
       const defDown = scaledPct(data.defDebuffPct);
       const dt = data.defDebuffPct?.turns ?? 2;
-      if (defDown > 0) setPctDebuff(actor, "def", defDown, dt);
+
+      if (defDown > 0) {
+        setPctDebuff(actor, "def", defDown, dt);
+        outcome.selfDefDebuffApplied = true;
+        outcome.debuffTurns = Math.max(outcome.debuffTurns, dt);
+        outcome.anyDebuff = 1;
+      }
     }
 
     const ih = data.immediateHit;
-    let dmg = 0;
-
     if (ih?.enabled) {
       const atkForHit = effectiveAtkWithTemporaryBoost(actor, atkBuff);
       const mult = randFloat(ih.minMult ?? 1.5, ih.maxMult ?? 2.0);
-      dmg = computeSimpleDamage(atkForHit * mult, enemy);
-      applyDamageToEnemy(enemy, dmg);
-      lines.push(`${title} uses ${special.name}! (+ATK) and hits for ${dmg} damage.`);
-    } else {
-      lines.push(`${title} uses ${special.name}! (+ATK)`);
+      outcome.dmg = computeSimpleDamage(atkForHit * mult * PLAYER_ATK_MULT, enemy);
+      applyDamageToEnemy(enemy, outcome.dmg);
     }
 
-    return {
-      lines,
-      used: true,
-      effects: {
-        atkBuffPct: atkBuff,
-        atkBuffTurns: atkBuff > 0 ? turns : 0,
-        damageDealt: dmg
-      }
-    };
+    return { used: true, effects: outcome };
   }
 
-  // ADVENTURE / MUSICAL
+  // ------------- ADVENTURE / MUSICAL --------------
   if (genre === "ADVENTURE" || genre === "MUSICAL") {
     const teamAtkBuff = scaledPct(data.teamAtkBuffPct);
     const teamAtkTurns = data.teamAtkBuffPct?.turns ?? (genre === "MUSICAL" ? 1 : 2);
@@ -1204,181 +1145,220 @@ function executeGenre({ actor, party, enemy, special, M, targetIndex }) {
         if (!m || m.hp <= 0) continue;
         setPctBuff(m, "atk", teamAtkBuff, teamAtkTurns);
       }
+      outcome.teamAtkBuffApplied = true;
+      outcome.buffTurns = Math.max(outcome.buffTurns, teamAtkTurns);
     }
 
     if (data.teamDefBuffPct) {
       const teamDefBuff = scaledPct(data.teamDefBuffPct);
       const teamDefTurns = data.teamDefBuffPct?.turns ?? 2;
+
       if (teamDefBuff > 0) {
         for (const m of party) {
           if (!m || m.hp <= 0) continue;
           setPctBuff(m, "def", teamDefBuff, teamDefTurns);
         }
+        outcome.teamDefBuffApplied = true;
+        outcome.buffTurns = Math.max(outcome.buffTurns, teamDefTurns);
       }
     }
 
     if (data.teamHealMaxHpPct) {
       const healPct = scaledPct(data.teamHealMaxHpPct);
-      let totalHealed = 0;
-      for (const m of party) {
-        if (!m || m.hp <= 0) continue;
-        totalHealed += applyHeal(m, roundInt(Number(m.maxHp || 0) * healPct));
+      if (healPct > 0) {
+        for (const m of party) {
+          if (!m || m.hp <= 0) continue;
+          outcome.teamHeal += applyHeal(m, roundInt(Number(m.maxHp || 0) * healPct));
+        }
       }
-      if (totalHealed > 0) lines.push(`${title} rallies the team (+${totalHealed} total HP).`);
     }
 
     if (data.teamStrike?.enabled) {
       const alive = party.filter((m) => m && m.hp > 0);
       if (alive.length > 0) {
-        const R = randFloat(data.teamStrike.totalMinMult ?? 1.5, data.teamStrike.totalMaxMult ?? 2.8);
+        const R = randFloat(
+          data.teamStrike.totalMinMult ?? 1.5,
+          data.teamStrike.totalMaxMult ?? 2.8
+        );
 
         const finalATKs = alive.map((m) => Number(m.atk || 0) * (1 + teamAtkBuff));
         const shares = sqrtWeightShares(finalATKs);
 
-        let totalDmg = 0;
         for (let i = 0; i < alive.length; i++) {
           const portionMult = R * shares[i];
-          const dmg = computeSimpleDamage(finalATKs[i] * portionMult, enemy);
-          totalDmg += applyDamageToEnemy(enemy, dmg);
+          const dmg = computeSimpleDamage(finalATKs[i] * portionMult * PLAYER_ATK_MULT, enemy);
+          outcome.teamDmg += applyDamageToEnemy(enemy, dmg);
         }
-
-        lines.push(`${title} triggers a TEAM STRIKE for ${totalDmg} total damage!`);
       }
     }
 
-    lines.push(`${title} uses ${special.name}!`);
-    return { lines, used: true, effects: null };
+    return { used: true, effects: outcome };
   }
 
-  // COMEDY
+  // ------------------- DRAMA ----------------------
+  if (genre === "DRAMA") {
+    const healPct = scaledPct(data.healSelfMaxHpPct);
+    const maxHp = Number(actor.maxHp ?? actor.hpMax ?? actor?.stats?.maxHp ?? 0);
+
+    if (healPct > 0 && maxHp > 0) {
+      outcome.heal = applyHeal(actor, roundInt(maxHp * healPct));
+    }
+
+    const defUp = scaledPct(data.defBuffPct);
+    const turns = data.defBuffPct?.turns ?? 2;
+
+    if (defUp > 0) {
+      setPctBuff(actor, "def", defUp, turns);
+      outcome.defBuffApplied = true;
+      outcome.buffTurns = Math.max(outcome.buffTurns, turns);
+    }
+
+    return { used: true, effects: outcome };
+  }
+
+  // ------------------ COMEDY ----------------------
   if (genre === "COMEDY") {
     const enemyAtkDown = scaledPct(data.enemyAtkDebuffPct);
     const turns = data.enemyAtkDebuffPct?.turns ?? 2;
-    if (enemyAtkDown > 0) setPctDebuff(enemy, "atk", enemyAtkDown, turns);
+
+    if (enemyAtkDown > 0) {
+      setPctDebuff(enemy, "atk", enemyAtkDown, turns);
+      outcome.enemyAtkDebuffApplied = true;
+      outcome.debuffTurns = Math.max(outcome.debuffTurns, turns);
+      outcome.anyDebuff = 1;
+    }
 
     const teamDefUp = scaledPct(data.teamDefBuffPct);
     const defTurns = data.teamDefBuffPct?.turns ?? 2;
+
     if (teamDefUp > 0) {
       for (const m of party) {
         if (!m || m.hp <= 0) continue;
         setPctBuff(m, "def", teamDefUp, defTurns);
       }
+      outcome.teamDefBuffApplied = true;
+      outcome.buffTurns = Math.max(outcome.buffTurns, defTurns);
     }
 
-    // (your old heal loop doesn't return effects; keeping consistent)
     const healPct = scaledPct(data.teamHealMaxHpPct);
-    for (const m of party) {
-      if (!m || m.hp <= 0) continue;
-      applyHeal(m, roundInt(Number(m.maxHp || 0) * healPct));
+    if (healPct > 0) {
+      for (const m of party) {
+        if (!m || m.hp <= 0) continue;
+        outcome.teamHeal += applyHeal(m, roundInt(Number(m.maxHp || 0) * healPct));
+      }
     }
 
-    lines.push(`${title} uses ${special.name}!`);
-    return {
-      lines,
-      used: true,
-      effects: {
-        enemyAtkDebuffPct: enemyAtkDown,
-        enemyAtkDebuffTurns: enemyAtkDown > 0 ? turns : 0,
-        defBuffPct: teamDefUp,
-        defBuffTurns: teamDefUp > 0 ? defTurns : 0
-      }
-    };
+    return { used: true, effects: outcome };
   }
 
-  // HORROR
+  // ------------------ HORROR ----------------------
   if (genre === "HORROR") {
     const boostPct = scaledPct(data.preHitAtkBuffPct);
     const atkForHit = effectiveAtkWithTemporaryBoost(actor, boostPct);
-    const dmg = computeSimpleDamage(atkForHit, enemy);
-    applyDamageToEnemy(enemy, dmg);
+
+    outcome.dmg = computeSimpleDamage(atkForHit * PLAYER_ATK_MULT, enemy);
+    applyDamageToEnemy(enemy, outcome.dmg);
 
     const defDown = scaledPct(data.enemyDefDebuffPct);
     const turns = data.enemyDefDebuffPct?.turns ?? 2;
-    if (defDown > 0) setPctDebuff(enemy, "def", defDown, turns);
 
-    lines.push(`${title} uses ${special.name}!`);
-    return {
-      lines,
-      used: true,
-      effects: {
-        damageDealt: dmg,
-        enemyDefDebuffPct: defDown,
-        enemyDefDebuffTurns: defDown > 0 ? turns : 0
-      }
-    };
+    if (defDown > 0) {
+      setPctDebuff(enemy, "def", defDown, turns);
+      outcome.enemyDefDebuffApplied = true;
+      outcome.debuffTurns = Math.max(outcome.debuffTurns, turns);
+      outcome.anyDebuff = 1;
+    }
+
+    return { used: true, effects: outcome };
   }
 
-  // THRILLER
+  // ----------------- THRILLER ---------------------
   if (genre === "THRILLER") {
     const vuln = scaledPct(data.nextHitVulnPct);
+    const turns = data.nextHitVulnPct?.turns ?? 1;
+
     const s = ensureStatuses(enemy);
     s.nextHitVulnPct = Math.max(Number(s.nextHitVulnPct || 0), Number(vuln || 0));
-    s.nextHitVulnTurns = Math.max(Number(s.nextHitVulnTurns || 0), Number(data.nextHitVulnPct?.turns ?? 1));
+    s.nextHitVulnTurns = Math.max(Number(s.nextHitVulnTurns || 0), Number(turns || 0));
     s.nextHitVulnActive = true;
 
-    lines.push(`${title} uses ${special.name}! Enemy is exposed to the next hit.`);
-    return { lines, used: true, effects: null };
+    if (vuln > 0) {
+      outcome.nextHitVulnApplied = true;
+      outcome.debuffTurns = Math.max(outcome.debuffTurns, turns);
+    }
+
+    return { used: true, effects: outcome };
   }
 
-  // MYSTERY / CRIME / DOCUMENTARY
+  // -------- MYSTERY / CRIME / DOCUMENTARY ---------
   if (genre === "MYSTERY" || genre === "CRIME" || genre === "DOCUMENTARY") {
-    let defDown = 0;
-    let atkDown = 0;
-    let turns = 2;
+    let applied = 0;
 
     if (data.enemyDefDebuffPct) {
-      defDown = scaledPct(data.enemyDefDebuffPct);
-      turns = data.enemyDefDebuffPct?.turns ?? 2;
-      if (defDown > 0) setPctDebuff(enemy, "def", defDown, turns);
-    }
-    if (data.enemyAtkDebuffPct) {
-      atkDown = scaledPct(data.enemyAtkDebuffPct);
-      turns = data.enemyAtkDebuffPct?.turns ?? 2;
-      if (atkDown > 0) setPctDebuff(enemy, "atk", atkDown, turns);
+      const defDown = scaledPct(data.enemyDefDebuffPct);
+      const turns = data.enemyDefDebuffPct?.turns ?? 2;
+
+      if (defDown > 0) {
+        setPctDebuff(enemy, "def", defDown, turns);
+        outcome.enemyDefDebuffApplied = true;
+        outcome.debuffTurns = Math.max(outcome.debuffTurns, turns);
+        applied = 1;
+      }
     }
 
-    lines.push(`${title} uses ${special.name}!`);
-    return {
-      lines,
-      used: true,
-      effects: {
-        enemyAtkDebuffPct: atkDown,
-        enemyAtkDebuffTurns: atkDown > 0 ? turns : 0,
-        enemyDefDebuffPct: defDown,
-        enemyDefDebuffTurns: defDown > 0 ? turns : 0
+    if (data.enemyAtkDebuffPct) {
+      const atkDown = scaledPct(data.enemyAtkDebuffPct);
+      const turns = data.enemyAtkDebuffPct?.turns ?? 2;
+
+      if (atkDown > 0) {
+        setPctDebuff(enemy, "atk", atkDown, turns);
+        outcome.enemyAtkDebuffApplied = true;
+        outcome.debuffTurns = Math.max(outcome.debuffTurns, turns);
+        applied = 1;
       }
-    };
+    }
+
+    outcome.anyDebuff = applied ? 1 : 0;
+
+    return { used: true, effects: outcome };
   }
 
-  // ROMANCE (needs ally targeting)
+  // ------------------ ROMANCE ---------------------
   if (genre === "ROMANCE") {
-    if (targetIndex == null || targetIndex < 0 || targetIndex >= party.length) {
-      return { lines: ["Choose an ally target."], used: false };
+    if (!Array.isArray(party) || targetIndex == null || targetIndex < 0 || targetIndex >= party.length) {
+      return { used: false, error: { code: "noAllyTarget" } };
     }
+
     const target = party[targetIndex];
     const healPct = scaledPct(data.healAllyMaxHpPct);
-    const healed = applyHeal(target, roundInt(Number(target.maxHp || 0) * healPct));
+    outcome.heal = applyHeal(target, roundInt(Number(target.maxHp || 0) * healPct));
 
-    lines.push(`${title} uses ${special.name} on ${target.movie.title.slice(0, 10)} (+${healed} HP).`);
-    return { lines, used: true, effects: { healedHp: healed } };
+    return { used: true, effects: outcome, meta: { targetIndex } };
   }
 
-  // FANTASY (needs ally targeting)
+  // ------------------ FANTASY ---------------------
   if (genre === "FANTASY") {
-    if (targetIndex == null || targetIndex < 0 || targetIndex >= party.length) {
-      return { lines: ["Choose an ally target."], used: false };
+    if (!Array.isArray(party) || targetIndex == null || targetIndex < 0 || targetIndex >= party.length) {
+      return { used: false, error: { code: "noAllyTarget" } };
     }
-    const target = party[targetIndex];
-    const shieldPct = scaledPct(data.shieldAllyMaxHpPct);
-    const turns = data.shieldAllyMaxHpPct?.turns ?? 2;
-    const shieldAmt = roundInt(Number(target.maxHp || 0) * shieldPct);
-    applyShield(target, shieldAmt, turns);
 
-    lines.push(`${title} uses ${special.name} on ${target.movie.title.slice(0, 10)} (shield +${shieldAmt}).`);
-    return { lines: usedTrue(), used: true, effects: { shieldAdded: shieldAmt, shieldTurns: turns } };
+    const target = party[targetIndex];
+        const shieldPct = scaledPct(data.shieldAllyMaxHpPct);
+
+    outcome.shield = roundInt(Number(target.maxHp || 0) * shieldPct);
+    applyShield(target, outcome.shield);
+
+    if (outcome.shield > 0) {
+      outcome.shieldApplied = true;
+
+      // âœ… Barrier rule: no duration
+      // outcome.shieldTurns intentionally omitted
+    }
+
+    return { used: true, effects: outcome, meta: { targetIndex } };
   }
 
-  // ANIMATION
+  // ---------------- ANIMATION ---------------------
   if (genre === "ANIMATION") {
     const dr = scaledPct(data.teamDamageReductionPct);
     const turns = data.teamDamageReductionPct?.turns ?? 2;
@@ -1390,15 +1370,18 @@ function executeGenre({ actor, party, enemy, special, M, targetIndex }) {
       s.damageReductionTurns = Math.max(Number(s.damageReductionTurns || 0), Number(turns || 0));
     }
 
-    lines.push(`${title} uses ${special.name}! Team takes less damage.`);
-    return { lines, used: true, effects: { damageReductionPct: dr, damageReductionTurns: turns } };
+    if (dr > 0) {
+      outcome.damageReductionApplied = true;
+      outcome.drTurns = turns;
+    }
+
+    return { used: true, effects: outcome };
   }
 
-  lines.push(`${title} uses ${special.name}.`);
-  return { lines, used: true, effects: null };
+  // ------------------ FALLBACK --------------------
+  return { used: true, effects: outcome };
 }
 
-// tiny helper to avoid accidental object-literal typos (keeps runtime stable)
-function usedTrue() {
-  return [];
-}
+
+
+

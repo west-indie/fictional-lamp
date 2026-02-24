@@ -20,7 +20,7 @@
 // Exports:
 // - createBattleMessageBox
 
-import { drawWrappedText } from "./text.js";
+import { drawWrappedText, drawWrappedTextWithHighlight } from "./text.js";
 
 export function createBattleMessageBox(options = {}) {
   const playTextBlip = typeof options.playTextBlip === "function" ? options.playTextBlip : null;
@@ -38,12 +38,48 @@ export function createBattleMessageBox(options = {}) {
   // state
   let message = "";
   let messageShown = "";
+  let messageHighlights = null;
   let isTyping = false;
   let typeIndex = 0;
   let lastTypeMs = 0;
 
   let messageQueue = [];
   let messageOnDone = null;
+  let currentLineOnStart = null;
+
+  function normalizeLineEntry(line) {
+    if (line && typeof line === "object" && !Array.isArray(line)) {
+      const normalizeHl = (hl) =>
+        hl && typeof hl === "object" && String(hl.name || "").trim() && String(hl.color || "").trim()
+          ? {
+              name: String(hl.name),
+              color: String(hl.color),
+              names: Array.isArray(hl.names) ? hl.names.map((n) => String(n || "")).filter(Boolean) : null
+            }
+          : null;
+
+      const hl = line.actorHighlight;
+      const actorHighlight = normalizeHl(hl);
+      const targetHighlight = normalizeHl(line.targetHighlight);
+      const highlights = Array.isArray(line.highlights)
+        ? line.highlights.map(normalizeHl).filter(Boolean)
+        : [];
+      if (actorHighlight) highlights.push(actorHighlight);
+      if (targetHighlight) highlights.push(targetHighlight);
+
+      return {
+        text: line.text ?? "",
+        onStart: typeof line.onStart === "function" ? line.onStart : null,
+        highlights: highlights.length > 0 ? highlights : null
+      };
+    }
+
+    return {
+      text: line == null ? "" : String(line),
+      onStart: null,
+      highlights: null
+    };
+  }
 
   function punctuationPauseForChar(ch) {
     if (ch === "." || ch === "," || ch === ":" || ch === ";") return TYPE_PUNCTUATION_PAUSE_MS;
@@ -58,16 +94,27 @@ export function createBattleMessageBox(options = {}) {
   function clear() {
     message = "";
     messageShown = "";
+    messageHighlights = null;
     isTyping = false;
     typeIndex = 0;
     lastTypeMs = 0;
     messageQueue = [];
     messageOnDone = null;
+    currentLineOnStart = null;
   }
 
-  function startTyping(text) {
-    message = String(text || "");
+  function startTyping(lineEntry) {
+    const entry = normalizeLineEntry(lineEntry);
+    currentLineOnStart = entry.onStart;
+
+    if (currentLineOnStart) {
+      try { currentLineOnStart(); } catch {}
+    }
+
+    const resolvedText = typeof entry.text === "function" ? entry.text() : entry.text;
+    message = String(resolvedText || "");
     messageShown = "";
+    messageHighlights = entry.highlights || null;
     isTyping = true;
     typeIndex = 0;
     lastTypeMs = nowMs();
@@ -116,11 +163,13 @@ export function createBattleMessageBox(options = {}) {
   }
 
   function queue(lines, onDone = null) {
-    const arr = Array.isArray(lines) ? lines : [String(lines)];
-    const cleaned = arr.filter(Boolean).map(String);
+    const arr = Array.isArray(lines) ? lines : [lines];
+    const cleaned = arr
+      .filter((v) => v !== null && v !== undefined && v !== "")
+      .map(normalizeLineEntry);
 
     if (!isTyping && messageQueue.length === 0 && messageOnDone === null) {
-      const first = cleaned.shift() || "";
+      const first = cleaned.shift() || { text: "" };
       startTyping(first);
     }
 
@@ -207,10 +256,24 @@ export function createBattleMessageBox(options = {}) {
     }
 
     // Message mode (typewriter)
-    drawWrappedText(ctx, messageShown, boxX + paddingX, boxY + 14, maxWidth, lineHeight, 3);
+    if (messageHighlights) {
+      drawWrappedTextWithHighlight(
+        ctx,
+        messageShown,
+        boxX + paddingX,
+        boxY + 14,
+        maxWidth,
+        lineHeight,
+        3,
+        messageHighlights
+      );
+    } else {
+      drawWrappedText(ctx, messageShown, boxX + paddingX, boxY + 14, maxWidth, lineHeight, 3);
+    }
 
     // show arrow indicator if queue remains
     if (!isTyping && (messageQueue.length > 0 || messageOnDone)) {
+      ctx.fillStyle = "#fff";
       ctx.fillText("▶", boxX + width - 14, boxY + boxH - 10);
     }
   }

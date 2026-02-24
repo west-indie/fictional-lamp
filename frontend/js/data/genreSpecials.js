@@ -1,4 +1,4 @@
-// frontend/js/data/genreSpecials.js
+﻿// frontend/js/data/genreSpecials.js
 //
 // Genre special registry.
 // - Each entry defines primary+secondary names and effect baselines.
@@ -22,11 +22,11 @@ export const genreSpecials = {
     secondaryName: "Adrenaline Surge",
     primary: {
       atkBuffPct: { value: 0.40, imdbScale: true, turns: 2 },
-      immediateHit: { enabled: true, minMult: 1.5, maxMult: 2.0 }
+      immediateHit: { enabled: true, minMult: 1.2, maxMult: 1.8 }
     },
     secondary: {
       atkBuffPct: { value: 0.20, imdbScale: true, turns: 2 },
-      immediateHit: { enabled: true, minMult: 1.5, maxMult: 2.0 }
+      immediateHit: { enabled: true, minMult: 1.2, maxMult: 1.5 }
     }
   },
 
@@ -37,12 +37,12 @@ export const genreSpecials = {
     primary: {
       teamAtkBuffPct: { value: 0.20, imdbScale: true, turns: 2 },
       teamDefBuffPct: { value: 0.15, imdbScale: false, turns: 2 },
-      teamStrike: { enabled: true, totalMinMult: 1.5, totalMaxMult: 2.8, split: "sqrt" }
+      teamStrike: { enabled: true, totalMinMult: 1.75, totalMaxMult: 2.0, split: "sqrt" }
     },
     secondary: {
       teamAtkBuffPct: { value: 0.10, imdbScale: true, turns: 2 },
       teamDefBuffPct: { value: 0.10, imdbScale: false, turns: 2 },
-      teamStrike: { enabled: true, totalMinMult: 1.5, totalMaxMult: 2.8, split: "sqrt" }
+      teamStrike: { enabled: true, totalMinMult: 1.4, totalMaxMult: 1.8, split: "sqrt" }
     }
   },
 
@@ -61,7 +61,7 @@ export const genreSpecials = {
   },
 
   COMEDY: {
-    target: "enemy",
+    target: ["team", "enemy"],
     primaryName: "Comic Relief",
     secondaryName: "Punchline",
     primary: {
@@ -123,11 +123,11 @@ export const genreSpecials = {
     primary: {
       atkBuffPct: { value: 0.30, imdbScale: true, turns: 2 },
       defDebuffPct: { value: 0.10, imdbScale: false, turns: 2 },
-      immediateHit: { enabled: true, minMult: 1.5, maxMult: 2.0 }
+      immediateHit: { enabled: true, minMult: 1.2, maxMult: 1.8 }
     },
     secondary: {
       atkBuffPct: { value: 0.15, imdbScale: true, turns: 2 },
-      immediateHit: { enabled: true, minMult: 1.5, maxMult: 2.0 }
+      immediateHit: { enabled: true, minMult: 1.2, maxMult: 1.6 }
     }
   },
 
@@ -149,10 +149,10 @@ export const genreSpecials = {
     secondaryName: "Animated Logic",
     primary: {
       teamDamageReductionPct: { value: 0.20, imdbScale: false, turns: 2 },
-      immediateHit: { enabled: true, minMult: 1.25, maxMult: 2.5 }
+      immediateHit: { enabled: true, minMult: 1.5, maxMult: 2.0 }
     },
     secondary: {
-      teamDamageReductionPct: { value: 0.10, imdbScale: false, turns: 2 }
+      teamDamageReductionPct: { value: 0., imdbScale: false, turns: 2 }
     }
   },
 
@@ -166,7 +166,7 @@ export const genreSpecials = {
     },
     secondary: {
       enemyAtkDebuffPct: { value: 0.15, imdbScale: false, turns: 2 },
-      immediateHit: { enabled: true, minMult: 1.25, maxMult: 1.75 }
+      immediateHit: { enabled: true, minMult: 1.2, maxMult: 1.75 }
     }
   },
 
@@ -189,12 +189,12 @@ export const genreSpecials = {
     primary: {
       teamAtkBuffPct: { value: 0.20, imdbScale: true, turns: 1 },
       teamHealMaxHpPct: { value: 0.10, imdbScale: false },
-      teamStrike: { enabled: true, totalMinMult: 1.5, totalMaxMult: 2.8, split: "sqrt" }
+      teamStrike: { enabled: true, totalMinMult: 2.0, totalMaxMult: 2.7, split: "sqrt" }
     },
     secondary: {
       teamAtkBuffPct: { value: 0.10, imdbScale: true, turns: 1 },
       teamHealMaxHpPct: { value: 0.05, imdbScale: false },
-      teamStrike: { enabled: true, totalMinMult: 1.5, totalMaxMult: 2.8, split: "sqrt" }
+      teamStrike: { enabled: true, totalMinMult: 1.5, totalMaxMult: 2.4, split: "sqrt" }
     }
   },
 
@@ -208,7 +208,7 @@ export const genreSpecials = {
     },
     secondary: {
       enemyAtkDebuffPct: { value: 0.10, imdbScale: false, turns: 2 },
-      immediateHit: { enabled: true, minMult: 2.0, maxMult: 3.0 }
+      immediateHit: { enabled: true, minMult: 2.0, maxMult: 2.5 }
     }
   }
 };

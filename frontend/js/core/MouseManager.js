@@ -6,6 +6,7 @@
 //   - x, y (GAME-space: 0..SCREEN.W-1, 0..SCREEN.H-1)
 //   - moved (true if pointer moved this frame)
 //   - clicked (true on a tap/click release this frame)
+//   - wheelY (wheel delta this frame; positive = scroll down)
 //
 // Extra helpers:
 //   - down (pointer is currently held)
@@ -59,6 +60,7 @@ export function createMouse(canvas) {
     released: false,
     clicked: false,
     tapped: false, // alias of clicked
+    wheelY: 0,
 
     setCursor(style) {
       try {
@@ -72,6 +74,7 @@ export function createMouse(canvas) {
       this.released = false;
       this.clicked = false;
       this.tapped = false;
+      this.wheelY = 0;
       this.setCursor("default");
     }
   };
@@ -155,6 +158,17 @@ export function createMouse(canvas) {
   // Canvas-level up/cancel
   canvas.addEventListener("pointerup", onPointerUpLike, { passive: false });
   canvas.addEventListener("pointercancel", onPointerUpLike, { passive: false });
+
+  canvas.addEventListener(
+    "wheel",
+    (e) => {
+      mouse.wheelY += Number(e.deltaY) || 0;
+      try {
+        e.preventDefault();
+      } catch {}
+    },
+    { passive: false }
+  );
 
   // ✅ NEW: window-level fallback up/cancel
   // This ensures clicks/taps still register even if pointer capture fails.

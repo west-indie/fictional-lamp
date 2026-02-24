@@ -24,11 +24,14 @@ import { resetAllConfirmPending } from "../systems/transientUiReset.js";
 
 import { syncSavedAudioIfReady } from "../systems/screenAudioSync.js";
 import { BOOT_SPLASH_TEXT } from "../data/bootSplashText.js";
+import { BOOT_LOAD_TEXT } from "../data/bootLoadText.js";
+import { playUIConfirmBlip, playUILoadingTone } from "../sfx/uiSfx.js";
 
 const TRANSITION_DELAY_MS = 800; // tweak 200–350 if needed
 
 let tSec = 0;
 let splashLine = "";
+let bootLoadLine = "PIRATED_MOVIE_V71";
 
 // phase control
 let phase = "idle"; // "idle" | "delay"
@@ -76,6 +79,8 @@ function beginTransition() {
   // ✅ Unlock/resume audio + keep saved Options audio applied (gesture-safe)
   // Do NOT start menu music here — MenuScreen will do that on enter().
   try { syncSavedAudioIfReady(); } catch {}
+  try { playUIConfirmBlip(); } catch {}
+  try { playUILoadingTone(TRANSITION_DELAY_MS); } catch {}
 
   // show SEARCHING/splash only during delay
   phase = "delay";
@@ -153,6 +158,7 @@ export const BootScreen = {
   enter() {
     tSec = 0;
     splashLine = "";
+    bootLoadLine = "PIRATED_MOVIE_V71";
     phase = "idle";
     delayMsLeft = 0;
 
@@ -168,6 +174,15 @@ export const BootScreen = {
         : "";
     } catch {
       splashLine = "";
+    }
+
+    try {
+      const arr = BOOT_LOAD_TEXT;
+      bootLoadLine = (Array.isArray(arr) && arr.length)
+        ? String(arr[(Math.random() * arr.length) | 0] || "PIRATED_MOVIE_V71")
+        : "PIRATED_MOVIE_V71";
+    } catch {
+      bootLoadLine = "PIRATED_MOVIE_V71";
     }
 
     // ✅ Reset blink freeze state on entry
@@ -259,14 +274,13 @@ export const BootScreen = {
       y += lineH;
     }
 
-    line("****  LOFI GALAXY  ****", ACCENT);
-    line("$10000 WORTH OF RAM FREE. ALMOST 3 WHOLE GIGS", TEXT_DIM);
-    line("SYSTEM DATE  OCTOBER XX 19XX", TEXT_DIM);
+    line("****  NEW UV SYSTEMS BASIC  ****", ACCENT);
+    line("SYSTEM DATE  OCTOBUARY XX 19XX", TEXT_DIM);
     y += lineH * 0.6;
 
     line("READY.", TEXT);
     y += lineH * 0.2;
-    line('LOAD "PIRATED_MOVIE_V71"', TEXT);
+    line(`LOAD "${bootLoadLine}"`, TEXT);
 
     const tapeBlinkOn = tapeBlinkFrozen
       ? tapeBlinkState

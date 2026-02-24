@@ -341,7 +341,7 @@ export const FourthPickScreen = {
       GameState.campaign.onefourShown = true;
       clearOneFourBattleApplyFlag(GameState);
       playUIConfirmBlip();
-      changeScreen("battle");
+      changeScreen("startingItemsPick");
       return;
     }
 
@@ -358,7 +358,7 @@ export const FourthPickScreen = {
       GameState.campaign.onefourShown = true;
       clearOneFourBattleApplyFlag(GameState);
       playUIConfirmBlip();
-      changeScreen("battle");
+      changeScreen("startingItemsPick");
       return;
     }
   },

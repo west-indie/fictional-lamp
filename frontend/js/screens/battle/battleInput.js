@@ -2,6 +2,9 @@
 // Module B: keyboard input routing for battle UI modes.
 // Behavior is intended to match the original inline logic in screens/battle.js.
 
+import { buildNoItemsLine } from "../../battleText/engines/buildItemLines.js";
+import { items } from "../../data/items.js";
+
 function isSpacePressed(Input) {
   return Input.pressed("Space");
 }
@@ -92,12 +95,23 @@ export function handleBattleKeyboardInput({
       }
       if (Input.pressed("Enter")) {
         Input.consume("Enter");
-        battleActions.confirmUseSelectedItem();
+        const entry = state.inventory[state.itemIndex];
+        const def = entry ? items[entry.id] : null;
+        const itemId = String(def?.id || entry?.id || "");
+        const itemCd = Math.max(0, Math.floor(Number(state?.itemCooldowns?.[itemId] || 0)));
+        const itemType = String(def?.type || "").trim().toLowerCase();
+        const sharedWeaponCd = itemType === "reusableweapon"
+          ? Math.max(0, Math.floor(Number(state?.itemCooldowns?.__weapon__ || 0)))
+          : 0;
+        const cooldownRemaining = Math.max(itemCd, sharedWeaponCd);
+        if (cooldownRemaining <= 0) {
+          battleActions.confirmUseSelectedItem();
+        }
       }
     } else {
       // Preserve original behavior: auto-return to command and queue message.
       state.uiMode = "command";
-      msgBox.queue(["You have no items!"], () => {
+      msgBox.queue([buildNoItemsLine()], () => {
         state.actionIndex = 0;
       });
     }
